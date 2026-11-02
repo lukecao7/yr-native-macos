@@ -17,11 +17,12 @@ EA has not endorsed and does not support this product.
 
 ## 这次开放了什么
 
-这里先发布项目自有的 C++ 网格导航模块和使用自制网格的测试。模块来自 CoastalCommand 工程，保留原有命名空间及 GPL-3.0-only 许可。它可以单独构建，无需游戏安装、游戏素材或图形引擎。
+当前公开项目自有的 C++ 网格导航、模拟耗时统计，以及配套的独立测试。代码来自 CoastalCommand 工程，保留原有命名空间及 GPL-3.0-only 许可。它可以单独构建，无需游戏安装、游戏素材或图形引擎。
 
 - `native/navigation/flow_cache.*` 按目标格缓存距离场。多个单位要去同一个地点时，可以共用一次计算。地图变化后的局部修复和以多线程准备距离场也在这个模块里。
 - `native/navigation/reachability.*` 判断两个格子是否连通，可以检查摆放障碍会不会切断已有通路。`nearest_walkable.*` 寻找最近的可通行格。
-- `tests/` 有四组回归测试，覆盖距离场缓存、局部修复、网格连通和最近可通行格。它们验证本模块的行为。原版寻路对齐和整场游戏性能另行验收。
+- `native/profiling/` 分阶段记录模拟耗时。每个工作线程分别写入计数，全部结束后再汇总。macOS 上还可以读取本进程的线程 CPU 时间。障碍网格探针可以记录网格何时改变。
+- `tests/` 有六组回归测试，覆盖距离场缓存、局部修复、网格连通、最近可通行格、线程统计和障碍采样。原版寻路对齐和整场游戏性能另行验收。
 
 ## 从源码开始
 
@@ -31,7 +32,7 @@ EA has not endorsed and does not support this product.
 make
 ```
 
-要在自制网格上运行四组独立测试，可以执行 `make test`。只检查所有源码和测试能否编译，可执行 `make check`。
+要运行六组独立测试，可以执行 `make test`。只检查所有源码和测试能否编译，可执行 `make check`。
 
 ## 一起开发
 
