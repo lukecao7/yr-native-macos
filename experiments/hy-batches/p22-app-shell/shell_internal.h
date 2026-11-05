@@ -29,8 +29,9 @@ int  YrShellGetDefaultState(void);
  * 校验 padding 未被覆写，再包成 CGImage。窗口与离屏共用。 */
 CGImageRef YRShellComposeFrame(int width, int height);
 /* 把一帧画进任意 CGContext（NSGraphicsContext 或 CGBitmapContext）。
- * 窗口 drawRect: 与 yr_shell_render_offscreen_png 都调用本函数。 */
-void YRShellDrawFrameIntoContext(CGContextRef ctx, int width, int height);
+ * 窗口 drawRect: 与 yr_shell_render_offscreen_png 都调用本函数。
+ * 返回 0 成功；-1 参数错误；-2 provider 或图像合成失败，未绘制。 */
+int YRShellDrawFrameIntoContext(CGContextRef ctx, int width, int height);
 
 /* stride padding 校验（RGBA8888 允许 stride > width*4，padding 不得被覆写）。 */
 int YrShellPaddingViolations(void);

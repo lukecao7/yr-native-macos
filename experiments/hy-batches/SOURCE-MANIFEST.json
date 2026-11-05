@@ -1,12 +1,18 @@
 {
-  "origin": "Hy batches 2026-11-04/05; bounded Codex fixes 2026-11-05",
+  "origin": "Hy batches 2026-11-04/05; bounded closeout and offscreen error-propagation fixes 2026-11-05",
   "license": "GPL-3.0-only; repository LICENSE applies",
   "scope": "Reviewed independent source subset; no game assets, extracted maps, binary builds, private logs or reverse-engineered engine code",
   "adapted_files": [
     "p1-mix/Makefile",
     "p2-map/Makefile",
     "p2-map/test_self_authored.cpp",
-    "p21-input-bridge/Makefile"
+    "p21-input-bridge/Makefile",
+    "p22-app-shell/Makefile",
+    "p22-app-shell/shell.mm",
+    "p22-app-shell/shell_internal.h",
+    "p22-app-shell/window_path.mm",
+    "p22-app-shell/offscreen_test.mm",
+    "p22-app-shell/test_export_io.py"
   ],
   "files": [
     {
@@ -157,12 +163,12 @@
     {
       "source": "p22-app-shell/shell_internal.h",
       "published": "p22-app-shell/shell_internal.h",
-      "sha256": "267ba70820420007cc0d8480f93ab4657b2667cecb114d98fd2ca6fe3cb2a66e"
+      "sha256": "3c9b0f717653e7da428ad0b8a7c34634d9293c9a67bd3cdc4f314629daa023b0"
     },
     {
       "source": "p22-app-shell/shell.mm",
       "published": "p22-app-shell/shell.mm",
-      "sha256": "e9d0677c5c90c7095ea8bad2b39373b0aa2116c8b6e97a6ee212096f35e0adde"
+      "sha256": "1ea85d38b656380187b997b13ec5d7ff481f1a74c4265d2641e0ec90e0c65b84"
     },
     {
       "source": "p22-app-shell/main.mm",
@@ -172,12 +178,12 @@
     {
       "source": "p22-app-shell/window_path.mm",
       "published": "p22-app-shell/window_path.mm",
-      "sha256": "ef54df98052c9d4db84f26c3def69014180654c4adb90cfd477228030b93550c"
+      "sha256": "272c7187165228a7603d8c40a6441b704d69f0bcea2c1640223ead1aef13ad8c"
     },
     {
       "source": "p22-app-shell/offscreen_test.mm",
       "published": "p22-app-shell/offscreen_test.mm",
-      "sha256": "1af2bbaf191c36b1e3eeead1aa0bf3a7cb9f697ff5e22e5bf4f47c9f851a1a32"
+      "sha256": "321283ec03d15fc8790d5c77c738d414c40e4514ad16d0ba3c213a69bb2a8ab4"
     },
     {
       "source": "p22-app-shell/event_capture_test.mm",
@@ -197,7 +203,7 @@
     {
       "source": "p22-app-shell/Makefile",
       "published": "p22-app-shell/Makefile",
-      "sha256": "ee2c9f2cac03a122ca522596cee5085aab58b1080bdece9ba5b9f67dd51ab6fb"
+      "sha256": "d166443901aaa607283b088c581d6c901d3f6e12d7897eab39f7c1c18e0b3d9f"
     },
     {
       "source": "p22-app-shell/Info.plist",
@@ -213,6 +219,11 @@
       "source": "verify_round5.py",
       "published": "verification/local_round5.py",
       "sha256": "370c2d48c44c7a8cc4481f7d12640322ee8e4fecd4bcf6fc3031d394012c0930"
+    },
+    {
+      "source": "p22-app-shell/test_export_io.py",
+      "published": "p22-app-shell/test_export_io.py",
+      "sha256": "6c805ed297851439d6625ca600fbf6c4fd8c7e7cb68c84c3b03de1f8635787d5"
     }
   ]
 }

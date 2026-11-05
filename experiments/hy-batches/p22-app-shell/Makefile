@@ -21,11 +21,13 @@ all: $(EXE) offscreen_test event_capture_test
 	@mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	@cp Info.plist $(APP)/Contents/Info.plist
 	@cp NOTICE.txt $(APP)/Contents/Resources/NOTICE.txt
-	@echo "== [1/3] offscreen self-test (SELF_AUTHORED_MOCK) =="
+	@echo "== [1/4] offscreen self-test (SELF_AUTHORED_MOCK) =="
 	./offscreen_test
-	@echo "== [2/3] event capture self-test (SELF_AUTHORED_MOCK) =="
+	@echo "== [2/4] offscreen write failures (headless child processes) =="
+	$(PY) test_export_io.py $(EXE)
+	@echo "== [3/4] event capture self-test (SELF_AUTHORED_MOCK) =="
 	./event_capture_test
-	@echo "== [3/3] generate shell_contract.json (nm -gU measured) =="
+	@echo "== [4/4] generate shell_contract.json (nm -gU measured) =="
 	$(PY) verify_shell.py --gen
 	@echo "ALL_DONE"
 
