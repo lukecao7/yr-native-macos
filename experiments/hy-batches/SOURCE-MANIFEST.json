@@ -12,7 +12,11 @@
     "p22-app-shell/shell_internal.h",
     "p22-app-shell/window_path.mm",
     "p22-app-shell/offscreen_test.mm",
-    "p22-app-shell/test_export_io.py"
+    "p22-app-shell/test_export_io.py",
+    "p3-window/Makefile",
+    "p3-window/present.mm",
+    "p3-window/present_test.mm",
+    "p3-window/test_export_io.py"
   ],
   "files": [
     {
@@ -48,17 +52,17 @@
     {
       "source": "p3-window/present.mm",
       "published": "p3-window/present.mm",
-      "sha256": "d525743a478688db1dbbd8ad2b523af3926a210ddcd49ff92bc20d3d465c0236"
+      "sha256": "8b3f021335a726de3d75ec33b33d0dd53581fdb61489b67afcbf444ca8aae59d"
     },
     {
       "source": "p3-window/present_test.mm",
       "published": "p3-window/present_test.mm",
-      "sha256": "27564fb374403c9cd6b5467282e6fc0276b223aa81b06917b7fd5f71faf58734"
+      "sha256": "7a85db3164b64c4faad8f050a42366e83e1af964aff198277c848f29029540b1"
     },
     {
       "source": "p3-window/Makefile",
       "published": "p3-window/Makefile",
-      "sha256": "4e62edaaced2fef33b16a4bab71bf5724be9db387b9e18a0772fab9a45fed0f8"
+      "sha256": "8cc87858b9fb4af0235a743ae1b73e50b49650b2092027102aab7c42ba430763"
     },
     {
       "source": "p5-isomap/isomap.cpp",
@@ -224,6 +228,11 @@
       "source": "p22-app-shell/test_export_io.py",
       "published": "p22-app-shell/test_export_io.py",
       "sha256": "6c805ed297851439d6625ca600fbf6c4fd8c7e7cb68c84c3b03de1f8635787d5"
+    },
+    {
+      "source": "p3-window/test_export_io.py",
+      "published": "p3-window/test_export_io.py",
+      "sha256": "e39d7c66afe3b9351e78a906996c273685a5a477cb54016e0fc10210b3f184b5"
     }
   ]
 }

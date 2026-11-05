@@ -7,6 +7,7 @@
 #include <array>
 #include <climits>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -111,7 +112,7 @@ void sample(const char* label, const DecodedPNG& image, int x, int y) {
 }
 } // namespace
 
-int main() {
+int main(int argc, const char* argv[]) {
     @autoreleasepool {
         try {
             require(NSApp == nil, "test must start without NSApplication");
@@ -139,6 +140,20 @@ int main() {
             const auto originalIndices = indices;
             const auto originalRGB565 = rgb565;
             const auto originalPalette = palette;
+            // Export one self-authored fixture in a resource-limited child.
+            if (argc != 1) {
+                if (argc != 3) return 2;
+                bool ok;
+                if (std::strcmp(argv[1], "--export-indexed") == 0)
+                    ok = presentOffscreenPNG(indices.data(), width, height,
+                                             indexedStride, palette.data(), argv[2]);
+                else if (std::strcmp(argv[1], "--export-rgb565") == 0)
+                    ok = presentOffscreenRGB565PNG(rgb565.data(), width, height,
+                                                   rgb565Stride, argv[2]);
+                else return 2;
+                std::printf("OFFSCREEN_WRITE_OK=%d\n", ok);
+                return ok ? 0 : 1;
+            }
             require(presentOffscreenPNG(indices.data(), width, height, indexedStride,
                                         palette.data(), "test_indexed.png"),
                     "indexed PNG encoding failed");
