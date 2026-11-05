@@ -1,0 +1,32 @@
+YuriSlice.app / P22 app-shell — NOTICE
+=====================================
+
+This bundle is a DIAGNOSTIC / RECONSTRUCTED AppKit shell, not a game.
+
+* It is a local rebuild against the shared C ABI (shared/yr_slice.h), plus
+  SELF_AUTHORED_ART diagnostic patterns, SELF_AUTHORED_MAPPING event mapping,
+  forensic checks and independent simulation. It is NOT linked against the
+  original "Yuri's Revenge" executable and does NOT reproduce original game
+  semantics. Goals 1 / 2 (目标 1 / 目标 2) are NOT achieved.
+
+* The offscreen verification path (yr_shell_render_offscreen_png) uses a
+  CGBitmapContext and shares the SAME compositor / draw function as the window
+  (NSView/CGContext) path. The offscreen path never creates a window, never
+  activates the app, never steals focus.
+
+* Self-checks use SELF_AUTHORED_MOCK providers / sinks only. They contain NO
+  world logic and NO input-bridge logic. This shell is NOT linked to the real
+  world core / input bridge; that integration is planned for round 6
+  (未与真实世界核心 / 输入桥链接，将在第六批集成).
+
+* The real NSWindow is NOT manually verified (NOT_ACHIEVED). By safety policy
+  the automated build never launches the GUI and never steals focus; the user
+  GUI entry only constructs window objects and then exits; it has no event
+  loop and does not present an interactive window. Round 6 is deferred.
+
+* Contents/Resources/ contains ONLY this plain-text NOTICE. No game assets
+  (no MIX extracts, no tiles.json, no PAL, no SHP, no PNG frames) are placed
+  in this distributable bundle. Real assets, if any, were verified locally
+  only and never bundled.
+
+* No ad-hoc signing is performed to induce the user to run this app.

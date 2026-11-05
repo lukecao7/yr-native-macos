@@ -1,0 +1,218 @@
+{
+  "origin": "Hy batches 2026-11-04/05; bounded Codex fixes 2026-11-05",
+  "license": "GPL-3.0-only; repository LICENSE applies",
+  "scope": "Reviewed independent source subset; no game assets, extracted maps, binary builds, private logs or reverse-engineered engine code",
+  "adapted_files": [
+    "p1-mix/Makefile",
+    "p2-map/Makefile",
+    "p2-map/test_self_authored.cpp",
+    "p21-input-bridge/Makefile"
+  ],
+  "files": [
+    {
+      "source": "shared/yr_slice.h",
+      "published": "shared/yr_slice.h",
+      "sha256": "917a84ec8902a51038285a32344970a7aa2c831e31ca794c700e4a38b8365660"
+    },
+    {
+      "source": "p1-mix/mix_probe.cpp",
+      "published": "p1-mix/mix_probe.cpp",
+      "sha256": "502fe46da4f40f84254d528c9abcfdc028ed1e06e83ac8946fc59df07e5b0386"
+    },
+    {
+      "source": "p1-mix/verify_probe.py",
+      "published": "p1-mix/verify_probe.py",
+      "sha256": "d443ca95ff0e50688c8a1eeb847f9dff6f79f8d50c6285e6b85c4c33c048f61a"
+    },
+    {
+      "source": "p2-map/shp_decode.cpp",
+      "published": "p2-map/shp_decode.cpp",
+      "sha256": "ee5a66a99b62eea2ae7d89cbf2e74fc8eebe5885d6efb539b8ca065621824215"
+    },
+    {
+      "source": "p2-map/shp_decode.hpp",
+      "published": "p2-map/shp_decode.hpp",
+      "sha256": "f0fc9ed5c3014133dab2f0e6225c615eb8ff8480c7fb4a9a23a994ac22c35698"
+    },
+    {
+      "source": "p3-window/present.h",
+      "published": "p3-window/present.h",
+      "sha256": "a54869ebcdae1ab7314880ddd0c42b0cb9f638b5bf6a002ee001398a450df4c5"
+    },
+    {
+      "source": "p3-window/present.mm",
+      "published": "p3-window/present.mm",
+      "sha256": "d525743a478688db1dbbd8ad2b523af3926a210ddcd49ff92bc20d3d465c0236"
+    },
+    {
+      "source": "p3-window/present_test.mm",
+      "published": "p3-window/present_test.mm",
+      "sha256": "27564fb374403c9cd6b5467282e6fc0276b223aa81b06917b7fd5f71faf58734"
+    },
+    {
+      "source": "p3-window/Makefile",
+      "published": "p3-window/Makefile",
+      "sha256": "4e62edaaced2fef33b16a4bab71bf5724be9db387b9e18a0772fab9a45fed0f8"
+    },
+    {
+      "source": "p5-isomap/isomap.cpp",
+      "published": "p5-isomap/isomap.cpp",
+      "sha256": "127aa8044b3e89c1f158c0c819896c22dfc1024379cf3b8b62231ceb70badd38"
+    },
+    {
+      "source": "p5-isomap/isomap.h",
+      "published": "p5-isomap/isomap.h",
+      "sha256": "165a7a01218c350ce827ffe3e548897b175528a12da06def887c73788d899552"
+    },
+    {
+      "source": "p5-isomap/main.cpp",
+      "published": "p5-isomap/main.cpp",
+      "sha256": "934dc0e644c7248ff5c3d55d96d1511c1792ebc20de6ff86c4ad6f3b57586dd4"
+    },
+    {
+      "source": "p5-isomap/Makefile",
+      "published": "p5-isomap/Makefile",
+      "sha256": "e0e6c613bb08bc330f6e153ed08f90578a165168dc6b681f7f7c9d02d03d7bdd"
+    },
+    {
+      "source": "p20-world-core/yr_world.cpp",
+      "published": "p20-world-core/yr_world.cpp",
+      "sha256": "6e2dc676ec4690938a32cfcc13faefd5b6bf775e7851ecd4cb74eb8a9730ab96"
+    },
+    {
+      "source": "p20-world-core/yr_util.h",
+      "published": "p20-world-core/yr_util.h",
+      "sha256": "e13d1d810ff8b52339da96bda54f4bd7b8e5860a72af8b10a84162ea8e80493b"
+    },
+    {
+      "source": "p20-world-core/yr_util.cpp",
+      "published": "p20-world-core/yr_util.cpp",
+      "sha256": "24a2ce0e93638d10a71a94230172d16730dc602a5c962e838a081bea34bbb80d"
+    },
+    {
+      "source": "p20-world-core/core_host.cpp",
+      "published": "p20-world-core/core_host.cpp",
+      "sha256": "310eb5e346668daa82d91461b3e70413d242962f111b69765ddedbadc52fce24"
+    },
+    {
+      "source": "p20-world-core/world_regression.cpp",
+      "published": "p20-world-core/world_regression.cpp",
+      "sha256": "52c2a756a986211399da79bd559c56eeb5376ab3064e264aa0e1cbfcf320a2f2"
+    },
+    {
+      "source": "p20-world-core/verify_core.py",
+      "published": "p20-world-core/verify_core.py",
+      "sha256": "105d2004a288f9fe01bee6d44b9860cfbe6a508cec40db25a0cf6e4d3fbdab09"
+    },
+    {
+      "source": "p20-world-core/make_negative.py",
+      "published": "p20-world-core/make_negative.py",
+      "sha256": "72a5c2a0195c4764a0fc6b4ccbf77a67682a193eaa34113e57892699f77d4b1f"
+    },
+    {
+      "source": "p20-world-core/run_check.py",
+      "published": "p20-world-core/run_check.py",
+      "sha256": "ad977a8c510920742f29e2ae5eacfb1e008263f06097765737399c6ee37bc649"
+    },
+    {
+      "source": "p20-world-core/Makefile",
+      "published": "p20-world-core/Makefile",
+      "sha256": "919b153243d107e1daf5fd2a18dd52f6ea316cb98b29341d53a6836e4788bccf"
+    },
+    {
+      "source": "p21-input-bridge/yr_input.cpp",
+      "published": "p21-input-bridge/yr_input.cpp",
+      "sha256": "f3f4f0b31567316ac79d13d35be363f1fb765062cf8f83d54cbc9c200932e33a"
+    },
+    {
+      "source": "p21-input-bridge/mock_world.h",
+      "published": "p21-input-bridge/mock_world.h",
+      "sha256": "82e2c2d9a7e9a9d4c256ee13277ae08766e25e50adf5f7e5889bf3be9c52ca28"
+    },
+    {
+      "source": "p21-input-bridge/mock_world.cpp",
+      "published": "p21-input-bridge/mock_world.cpp",
+      "sha256": "dfe4a1b2b52666038264334db2eb61fe731a192146bf311ca0957543705102b6"
+    },
+    {
+      "source": "p21-input-bridge/mini_json.hpp",
+      "published": "p21-input-bridge/mini_json.hpp",
+      "sha256": "b11e6d1ec4f7038312087f23521189eca8d7851db0a09b676576a8f9f0265598"
+    },
+    {
+      "source": "p21-input-bridge/replay_host.cpp",
+      "published": "p21-input-bridge/replay_host.cpp",
+      "sha256": "5dd7a8c52a48fd1b707830e310918e2bcaf5fd0ea9155a9877e551cc0c42923a"
+    },
+    {
+      "source": "p21-input-bridge/replay_SELF_AUTHORED.json",
+      "published": "p21-input-bridge/replay_SELF_AUTHORED.json",
+      "sha256": "93b1432e9415be707d515f626eb7598d661da2629af42b689512220833990c89"
+    },
+    {
+      "source": "p21-input-bridge/input_regression.cpp",
+      "published": "p21-input-bridge/input_regression.cpp",
+      "sha256": "f88355a9c9f2629f28634fd6f2faf7c4002f5b42b7db879314fd62cbbd0b04fd"
+    },
+    {
+      "source": "p22-app-shell/shell_internal.h",
+      "published": "p22-app-shell/shell_internal.h",
+      "sha256": "267ba70820420007cc0d8480f93ab4657b2667cecb114d98fd2ca6fe3cb2a66e"
+    },
+    {
+      "source": "p22-app-shell/shell.mm",
+      "published": "p22-app-shell/shell.mm",
+      "sha256": "e9d0677c5c90c7095ea8bad2b39373b0aa2116c8b6e97a6ee212096f35e0adde"
+    },
+    {
+      "source": "p22-app-shell/main.mm",
+      "published": "p22-app-shell/main.mm",
+      "sha256": "50ea2bfe426836133a2e5db77504e369d41b67c497cbe11e1e18fff08cc7bec8"
+    },
+    {
+      "source": "p22-app-shell/window_path.mm",
+      "published": "p22-app-shell/window_path.mm",
+      "sha256": "ef54df98052c9d4db84f26c3def69014180654c4adb90cfd477228030b93550c"
+    },
+    {
+      "source": "p22-app-shell/offscreen_test.mm",
+      "published": "p22-app-shell/offscreen_test.mm",
+      "sha256": "1af2bbaf191c36b1e3eeead1aa0bf3a7cb9f697ff5e22e5bf4f47c9f851a1a32"
+    },
+    {
+      "source": "p22-app-shell/event_capture_test.mm",
+      "published": "p22-app-shell/event_capture_test.mm",
+      "sha256": "87f804e266d0dcf3dfbe16e05dbdad021bae31c20f96158c1525976b8d476c4c"
+    },
+    {
+      "source": "p22-app-shell/verify_shell.py",
+      "published": "p22-app-shell/verify_shell.py",
+      "sha256": "7a425e892a47f92623912fcf3a1a358dc6b9dc8478e3d5e147702ef436f8d981"
+    },
+    {
+      "source": "p22-app-shell/do_check.sh",
+      "published": "p22-app-shell/do_check.sh",
+      "sha256": "ffab2da8bce4fbe5bbbab07b5f076446935c3f831cfba80085ae1ff8b5308d40"
+    },
+    {
+      "source": "p22-app-shell/Makefile",
+      "published": "p22-app-shell/Makefile",
+      "sha256": "ee2c9f2cac03a122ca522596cee5085aab58b1080bdece9ba5b9f67dd51ab6fb"
+    },
+    {
+      "source": "p22-app-shell/Info.plist",
+      "published": "p22-app-shell/Info.plist",
+      "sha256": "8bc6e15fbf5d3c63f4a247fa434c84fe6a79058001da470d118f1f8da3312fcb"
+    },
+    {
+      "source": "p22-app-shell/NOTICE.txt",
+      "published": "p22-app-shell/NOTICE.txt",
+      "sha256": "73d072bd3f262597304aedb77e38a7b379d94d637dc782c9792bb77cce7d8c63"
+    },
+    {
+      "source": "verify_round5.py",
+      "published": "verification/local_round5.py",
+      "sha256": "370c2d48c44c7a8cc4481f7d12640322ee8e4fecd4bcf6fc3031d394012c0930"
+    }
+  ]
+}

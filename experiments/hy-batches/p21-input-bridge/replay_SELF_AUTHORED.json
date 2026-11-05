@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "source": "SELF_AUTHORED",
+  "note": "自制事件序列（SELF_AUTHORED），非原版 Windows 事件取证；用于回放本桥接层。yr_event.type 取 shared/yr_slice.h 枚举整数值：1=LEFT_DOWN 2=LEFT_UP 3=LEFT_DRAG 4=RIGHT_DOWN 5=RIGHT_UP 6=KEY_DOWN 7=KEY_UP；modifiers 位 1=SHIFT。S1-S4 为 event_map.json 中 4 条 mapped 操作的完整 yr_events 展开；N1-N4 为自制非法 / 证据不足事件，要求 dispatch 返回 -1 且不产生任何世界调用。本序列不含浮点，供 replay_host 的极简解析器读取。",
+  "sequences": [
+    {
+      "seq_id": "S1",
+      "action_id": "drag_box_select",
+      "bridge_support": "mapped",
+      "note": "框选：LEFT_DOWN 起框 / LEFT_DRAG 更新框 / LEFT_UP 提交 → yr_world_select_box(10,10,20,20,0)",
+      "events": [
+        {"type": 1, "x": 10, "y": 10, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 3, "x": 20, "y": 20, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 2, "x": 20, "y": 20, "modifiers": 0, "click_count": 1, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "S2",
+      "action_id": "shift_add_select",
+      "bridge_support": "mapped",
+      "note": "Shift 加选：单击带 SHIFT(modifiers=1) → LEFT_UP 提交 additive=1 → yr_world_select_box(7,7,7,7,1)",
+      "events": [
+        {"type": 1, "x": 7, "y": 7, "modifiers": 1, "click_count": 1, "key_code": -1},
+        {"type": 2, "x": 7, "y": 7, "modifiers": 1, "click_count": 1, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "S3",
+      "action_id": "right_click_move",
+      "bridge_support": "mapped",
+      "note": "右键下令：RIGHT_DOWN 先查 yr_world_selected_count、再对落点 yr_world_order_move(30,40)",
+      "events": [
+        {"type": 4, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "S4",
+      "action_id": "left_click_select",
+      "bridge_support": "mapped",
+      "note": "单击选单位：LEFT_DOWN/LEFT_UP 点框 → yr_world_select_box(5,5,5,5,0)",
+      "events": [
+        {"type": 1, "x": 5, "y": 5, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 2, "x": 5, "y": 5, "modifiers": 0, "click_count": 1, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "N1",
+      "action_id": "illegal_unknown_type",
+      "bridge_support": "unsupported",
+      "note": "自制非法事件：type=99 不在 yr_event 枚举，dispatch 应返回 -1 且无世界调用",
+      "events": [
+        {"type": 99, "x": 0, "y": 0, "modifiers": 0, "click_count": 0, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "N2",
+      "action_id": "illegal_key_down",
+      "bridge_support": "unsupported",
+      "note": "自制键盘 KEY_DOWN：桥无键盘语义（P18: unported），dispatch 应返回 -1 且无世界调用",
+      "events": [
+        {"type": 6, "x": 0, "y": 0, "modifiers": 0, "click_count": 0, "key_code": 1}
+      ]
+    },
+    {
+      "seq_id": "N3",
+      "action_id": "illegal_right_up",
+      "bridge_support": "unsupported",
+      "note": "自制 RIGHT_UP：yr_slice.h 未定义其语义，dispatch 应返回 -1 且无世界调用",
+      "events": [
+        {"type": 5, "x": 12, "y": 12, "modifiers": 0, "click_count": 1, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "N4",
+      "action_id": "illegal_drag_without_box",
+      "bridge_support": "unsupported",
+      "note": "自制未起框就 LEFT_DRAG：状态机非法，dispatch 应返回 -1 且无世界调用",
+      "events": [
+        {"type": 3, "x": 50, "y": 50, "modifiers": 0, "click_count": 1, "key_code": -1}
+      ]
+    }
+  ]
+}
