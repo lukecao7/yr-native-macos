@@ -115,13 +115,24 @@ bool writePNG(CGImageRef image, const char* path) noexcept {
         kCFAllocatorDefault, reinterpret_cast<const UInt8*>(path),
         static_cast<CFIndex>(length), false);
     if (!url) return false;
-    CGImageDestinationRef destination = CGImageDestinationCreateWithURL(
-        url, CFSTR("public.png"), 1, nullptr);
-    CFRelease(url);
-    if (!destination) return false;
+    // URL destinations can report Finalize=true after a short write.
+    // Encode first, then check an atomic file write to preserve prior output.
+    CFMutableDataRef png = CFDataCreateMutable(nullptr, 0);
+    if (!png) { CFRelease(url); return false; }
+    CGImageDestinationRef destination = CGImageDestinationCreateWithData(
+        png, CFSTR("public.png"), 1, nullptr);
+    if (!destination) { CFRelease(png); CFRelease(url); return false; }
     CGImageDestinationAddImage(destination, image, nullptr);
-    const bool ok = CGImageDestinationFinalize(destination);
+    bool ok = CGImageDestinationFinalize(destination);
     CFRelease(destination);
+    if (ok) {
+        @autoreleasepool {
+            ok = [(__bridge NSData*)png writeToURL:(__bridge NSURL*)url
+                                           options:NSDataWritingAtomic error:nil];
+        }
+    }
+    CFRelease(png);
+    CFRelease(url);
     return ok;
 }
 } // namespace
