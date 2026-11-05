@@ -10,9 +10,11 @@
  * 帧差异由 verify_shell.py 用纯标准库 PNG 解码器逐像素核验。
  */
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 #include "shell_internal.h"
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 /* 真实记录 SELF_AUTHORED_MOCK provider 的调用序号（供 frame_meta.json 取证）。 */
 static int g_mock_provider_calls = 0;
@@ -39,6 +41,110 @@ static int MockFrameProvider(uint8_t *rgba, int width, int height,
         }
     }
     return width * height;
+}
+
+/* 故意失败；第二种情况在报错前写过部分像素，仍不得导出。 */
+struct FailingFrame { bool write_partial; int calls; };
+static int FailingFrameProvider(uint8_t *rgba, int, int, size_t, void *userdata) {
+    FailingFrame *frame = static_cast<FailingFrame *>(userdata);
+    ++frame->calls;
+    if (frame->write_partial) {
+        rgba[0] = 255; rgba[1] = 0; rgba[2] = 0; rgba[3] = 255;
+    }
+    return -42;
+}
+
+static bool PngDecodesAtSize(NSString *path, int width, int height) {
+    CGImageSourceRef source = CGImageSourceCreateWithURL(
+        (__bridge CFURLRef)[NSURL fileURLWithPath:path], nullptr);
+    if (!source) return false;
+    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, nullptr);
+    bool ok = image && CGImageGetWidth(image) == (size_t)width &&
+                      CGImageGetHeight(image) == (size_t)height;
+    if (image) CGImageRelease(image);
+    CFRelease(source);
+    return ok;
+}
+
+static int TestExportFailures(void) {
+    int failures = 0;
+    auto need = [&](const char *name, bool ok, int rc) {
+        std::printf("EXPORT_CASE=%s RC=%d OK=%d\n", name, rc, ok);
+        if (!ok) ++failures;
+    };
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [@"yr-shell-errors-" stringByAppendingString:[[NSProcessInfo processInfo] globallyUniqueString]]];
+    if (![fm createDirectoryAtPath:dir withIntermediateDirectories:NO attributes:nil error:nil]) {
+        need("setup", false, -1);
+        return failures;
+    }
+    const int width = 32, height = 24;
+    int state = 1;
+    NSString *existing = [dir stringByAppendingPathComponent:@"existing.png"];
+    yr_shell_set_frame_provider(MockFrameProvider, &state);
+    int rc = yr_shell_render_offscreen_png([existing fileSystemRepresentation], width, height);
+    NSData *original = [NSData dataWithContentsOfFile:existing];
+    need("normal_provider", rc == 0 && original.length > 0 &&
+         PngDecodesAtSize(existing, width, height), rc);
+
+    uint8_t pixels[width * height * 4];
+    uint8_t untouched[sizeof(pixels)];
+    std::memset(untouched, 0x5A, sizeof(untouched));
+    CGColorSpaceRef colors = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = colors ? CGBitmapContextCreate(
+        pixels, width, height, 8, width * 4, colors,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big) : nullptr;
+    if (colors) CGColorSpaceRelease(colors);
+    need("draw_context_created", context != nullptr, context ? 0 : -1);
+    if (context) {
+        rc = YRShellDrawFrameIntoContext(context, width, height);
+        need("normal_draw", rc == 0, rc);
+    }
+    rc = YRShellDrawFrameIntoContext(nullptr, width, height);
+    need("invalid_draw_context", rc < 0, rc);
+
+    for (bool partial : {false, true}) {
+        FailingFrame frame = {partial, 0};
+        yr_shell_set_frame_provider(FailingFrameProvider, &frame);
+        CGImageRef composed = YRShellComposeFrame(width, height);
+        need(partial ? "partial_compose" : "failed_compose",
+             !composed && frame.calls == 1, composed ? 0 : -1);
+        if (composed) CGImageRelease(composed);
+        if (context) {
+            std::memcpy(pixels, untouched, sizeof(pixels));
+            rc = YRShellDrawFrameIntoContext(context, width, height);
+            need(partial ? "partial_draw_unchanged" : "failed_draw_unchanged",
+                 rc < 0 && std::memcmp(pixels, untouched, sizeof(pixels)) == 0, rc);
+        }
+
+        int callsBeforeExport = frame.calls;
+        NSString *fresh = [dir stringByAppendingPathComponent:
+            partial ? @"partial.png" : @"failed.png"];
+        rc = yr_shell_render_offscreen_png([fresh fileSystemRepresentation], width, height);
+        need(partial ? "partial_no_file" : "provider_failure_no_file",
+             rc == -7 && frame.calls == callsBeforeExport + 1 &&
+             ![fm fileExistsAtPath:fresh], rc);
+        rc = yr_shell_render_offscreen_png([existing fileSystemRepresentation], width, height);
+        need(partial ? "partial_preserves_existing" : "failure_preserves_existing",
+             rc == -7 && frame.calls == callsBeforeExport + 2 &&
+             [original isEqualToData:[NSData dataWithContentsOfFile:existing]], rc);
+    }
+    if (context) CGContextRelease(context);
+
+    yr_shell_set_frame_provider(MockFrameProvider, &state);
+    NSString *missing = [dir stringByAppendingPathComponent:@"missing/output.png"];
+    rc = yr_shell_render_offscreen_png([missing fileSystemRepresentation], width, height);
+    need("write_missing_parent", rc < 0 && ![fm fileExistsAtPath:missing], rc);
+    rc = yr_shell_render_offscreen_png([dir fileSystemRepresentation], width, height);
+    BOOL isDirectory = NO;
+    need("write_directory", rc < 0 && [fm fileExistsAtPath:dir isDirectory:&isDirectory] &&
+         isDirectory, rc);
+    rc = yr_shell_render_offscreen_png([existing fileSystemRepresentation], width, height);
+    need("success_after_failure", rc == 0 && PngDecodesAtSize(existing, width, height), rc);
+    yr_shell_set_frame_provider(nullptr, nullptr);
+    need("cleanup", [fm removeItemAtPath:dir error:nil], 0);
+    return failures;
 }
 
 /* ---- SELF_AUTHORED_MOCK：只记录 yr_event 的 sink（无输入桥逻辑） ---- */
@@ -163,6 +269,7 @@ int main(void) {
         std::printf("MOCK_SINK_DELIVERED=%d SINK_COUNT=%d\n", sinkOk, log.count);
         if (!sinkOk) failures++;
 
+        failures += TestExportFailures();
         std::printf("SELFTEST_FAILURES=%d\n", failures);
         return failures == 0 ? 0 : 1;
     }

@@ -30,7 +30,8 @@ static const int kCellPx = 24; /* SELF_AUTHORED_MAPPING: 每 cell 24 像素 */
     CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
     int w = (int)self.bounds.size.width;
     int h = (int)self.bounds.size.height;
-    YRShellDrawFrameIntoContext(ctx, w, h);
+    int rc = YRShellDrawFrameIntoContext(ctx, w, h);
+    if (rc != 0) NSLog(@"YRShell frame drawing failed rc=%d", rc);
 }
 
 /* NSResponder -> yr_event，经 event sink 送出（与自检共用同一函数）。 */

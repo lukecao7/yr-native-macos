@@ -104,6 +104,7 @@ CGImageRef YRShellComposeFrame(int width, int height) {
     CFRelease(data);
     if (!prov) return nullptr;
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    if (!cs) { CGDataProviderRelease(prov); return nullptr; }
     CGBitmapInfo binfo = kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big;
     CGImageRef img = CGImageCreate((size_t)width, (size_t)height, 8, 32, stride,
                                    cs, binfo, prov, nullptr, false,
@@ -115,12 +116,13 @@ CGImageRef YRShellComposeFrame(int width, int height) {
 
 /* 唯一真源：绘制函数 —— 把一帧画进任意 CGContext。
  * 窗口 drawRect: 与 yr_shell_render_offscreen_png 都只调用本函数。 */
-void YRShellDrawFrameIntoContext(CGContextRef ctx, int width, int height) {
-    if (!ctx || width <= 0 || height <= 0) return;
+int YRShellDrawFrameIntoContext(CGContextRef ctx, int width, int height) {
+    if (!ctx || width <= 0 || height <= 0) return -1;
     CGImageRef img = YRShellComposeFrame(width, height);
-    if (!img) return;
+    if (!img) return -2;
     CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height), img);
     CGImageRelease(img);
+    return 0;
 }
 
 int  YrShellPaddingViolations(void)      { return g_padding_violations; }
@@ -148,13 +150,17 @@ int yr_shell_render_offscreen_png(const char *png_path, int width, int height) {
     /* 目标上下文：CGBitmapContext（离屏）。使用被最广泛支持的 BGRA 后备格式，
      * 由 CG 负责颜色/字节序转换，最终 PNG 颜色不受影响。 */
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    if (!cs) return -2;
     CGBitmapInfo binfo = kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little;
     CGContextRef bctx = CGBitmapContextCreate(nullptr, (size_t)width, (size_t)height,
                                               8, 0, cs, binfo);
     CGColorSpaceRelease(cs);
     if (!bctx) return -2;
 
-    YRShellDrawFrameIntoContext(bctx, width, height); /* 唯一真源绘制函数 */
+    if (YRShellDrawFrameIntoContext(bctx, width, height) != 0) {
+        CGContextRelease(bctx);
+        return -7; /* 合成/绘制失败：不创建 PNG，不覆盖已有文件。 */
+    }
     CGContextFlush(bctx);
     CGImageRef outImg = CGBitmapContextCreateImage(bctx);
     CGContextRelease(bctx);
@@ -163,15 +169,26 @@ int yr_shell_render_offscreen_png(const char *png_path, int width, int height) {
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(
         nullptr, (const UInt8 *)png_path, (CFIndex)strlen(png_path), false);
     if (!url) { CGImageRelease(outImg); return -4; }
+    /* ImageIO 的 URL destination 在短写时也可能 Finalize=true。
+     * 先编码到内存，再检查原子写入结果，失败时保留原目标且不留半张 PNG。 */
+    CFMutableDataRef png = CFDataCreateMutable(nullptr, 0);
+    if (!png) { CFRelease(url); CGImageRelease(outImg); return -5; }
     /* UTI 用字符串常量，避免额外链接 CoreServices / UniformTypeIdentifiers。 */
-    CGImageDestinationRef dest = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, nullptr);
-    CFRelease(url);
-    if (!dest) { CGImageRelease(outImg); return -5; }
+    CGImageDestinationRef dest = CGImageDestinationCreateWithData(png, CFSTR("public.png"), 1, nullptr);
+    if (!dest) { CFRelease(png); CFRelease(url); CGImageRelease(outImg); return -5; }
     CGImageDestinationAddImage(dest, outImg, nullptr);
     bool ok = CGImageDestinationFinalize(dest);
     CFRelease(dest);
     CGImageRelease(outImg);
-    return ok ? 0 : -6;
+    int rc = -6;
+    if (ok) {
+        BOOL written = [(__bridge NSData *)png writeToURL:(__bridge NSURL *)url
+                                                options:NSDataWritingAtomic error:nil];
+        rc = written ? 0 : -5;
+    }
+    CFRelease(png);
+    CFRelease(url);
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */
