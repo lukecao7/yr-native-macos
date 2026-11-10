@@ -32,6 +32,7 @@ python3 experiments/hy-batches/verification/test_failure_gate.py
 ```
 
 测试在临时目录生成 `SELF_AUTHORED` 网格和调色板，不读取游戏安装或本地素材。
+地图解码允许完整地形记录以四个零字节结束，仍要求每个地图坐标恰好出现一次。
 默认测试不会启动 GUI；`--native` 同样不启动 GUI。`YuriSlice.app` 默认只打印用法，
 其 `--gui` 当前只构造窗口对象后退出，不会打开可玩的窗口。
 

@@ -171,13 +171,57 @@ Suite self_tests() {
         suite.check(map.tiles[0].tile == 70000 && map.tiles[5].ice == 1 && map.tiles[5].level == 2,
                     "11-byte record fields and dense ordering");
     }
+    // A literal-only LZO chunk containing synthetic cell data exercises the
+    // expanded payload terminator separately from a compressed chunk marker.
+    const auto decode_lzo_map = [](const Bytes& payload) {
+        require(payload.size() >= 4 && payload.size() <= 238, "test LZO literal length");
+        Bytes packed;
+        word(packed, payload.size() + 4);
+        word(packed, payload.size());
+        packed.push_back(static_cast<std::uint8_t>(17 + payload.size()));
+        packed.insert(packed.end(), payload.begin(), payload.end());
+        packed.insert(packed.end(), {17, 0, 0});
+        return isomap::decode_bytes(packed_ini(packed, 2, 2), "synthetic-lzo.map");
+    };
+    const auto unterminated = decode_lzo_map(raw);
+    suite.check(unterminated.success && unterminated.codec == "LZO1X" && unterminated.raw == raw,
+                "LZO cell payload without terminator");
+    Bytes terminated = raw;
+    terminated.insert(terminated.end(), 4, 0);
+    const auto with_terminator = decode_lzo_map(terminated);
+    suite.check(with_terminator.success && with_terminator.codec == "LZO1X" &&
+                with_terminator.raw == terminated && with_terminator.decompressed_bytes == terminated.size() &&
+                with_terminator.cell_count == 6 && with_terminator.tiles.size() == 6 &&
+                with_terminator.tiles.back().tile == 70005,
+                "zero payload terminator preserves raw bytes and adds no cell");
+    Bytes nonzero_terminator = terminated;
+    nonzero_terminator.back() = 1;
+    suite.check(!decode_lzo_map(nonzero_terminator).success, "nonzero payload terminator");
+    for (const std::size_t count : {3, 8}) {
+        Bytes bad_length = raw;
+        bad_length.insert(bad_length.end(), count, 0);
+        suite.check(!decode_lzo_map(bad_length).success, "invalid payload terminator length");
+    }
+    Bytes outside = terminated;
+    outside.front() = 255;
+    const auto outside_map = decode_lzo_map(outside);
+    suite.check(!outside_map.success && outside_map.reason.find("coordinate outside") != std::string::npos,
+                "payload terminator does not admit out-of-bounds cells");
     Bytes duplicate = raw;
     std::copy_n(raw.begin(), 4, duplicate.begin() + 11);
     const auto duplicated = isomap::decode_bytes(packed_ini(pack_lcw(duplicate), 2, 2), "duplicate.map");
     suite.check(!duplicated.success && duplicated.reason.find("duplicate") != std::string::npos, "duplicate cells");
+    duplicate.insert(duplicate.end(), 4, 0);
+    const auto terminated_duplicate = decode_lzo_map(duplicate);
+    suite.check(!terminated_duplicate.success && terminated_duplicate.reason.find("duplicate") != std::string::npos,
+                "payload terminator does not admit duplicate cells");
     Bytes missing(raw.begin(), raw.end() - 11);
     const auto partial = isomap::decode_bytes(packed_ini(pack_lcw(missing), 2, 2), "missing.map");
     suite.check(!partial.success && partial.reason.find("length mismatch") != std::string::npos, "missing record");
+    missing.insert(missing.end(), 4, 0);
+    const auto terminated_partial = decode_lzo_map(missing);
+    suite.check(!terminated_partial.success && terminated_partial.reason.find("length mismatch") != std::string::npos,
+                "payload terminator does not admit sparse maps");
     Bytes zero = raw;
     for (std::size_t p = 4; p < zero.size(); p += 11) std::fill_n(zero.begin() + static_cast<std::ptrdiff_t>(p), 4, 0);
     const auto blank = isomap::decode_bytes(packed_ini(pack_lcw(zero), 2, 2), "zero.map");

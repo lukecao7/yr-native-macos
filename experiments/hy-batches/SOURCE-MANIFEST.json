@@ -16,7 +16,9 @@
     "p3-window/Makefile",
     "p3-window/present.mm",
     "p3-window/present_test.mm",
-    "p3-window/test_export_io.py"
+    "p3-window/test_export_io.py",
+    "p5-isomap/isomap.cpp",
+    "p5-isomap/main.cpp"
   ],
   "files": [
     {
@@ -67,7 +69,7 @@
     {
       "source": "p5-isomap/isomap.cpp",
       "published": "p5-isomap/isomap.cpp",
-      "sha256": "127aa8044b3e89c1f158c0c819896c22dfc1024379cf3b8b62231ceb70badd38"
+      "sha256": "5a08bf695d9777f1c38686e41194c49305cf242cc2a2cd7c67b32024d32ed138"
     },
     {
       "source": "p5-isomap/isomap.h",
@@ -77,7 +79,7 @@
     {
       "source": "p5-isomap/main.cpp",
       "published": "p5-isomap/main.cpp",
-      "sha256": "934dc0e644c7248ff5c3d55d96d1511c1792ebc20de6ff86c4ad6f3b57586dd4"
+      "sha256": "dbd5acd1a3b1922aeb3c629bccb18d02eed599189c2cccd73a6ae99171c922e5"
     },
     {
       "source": "p5-isomap/Makefile",
