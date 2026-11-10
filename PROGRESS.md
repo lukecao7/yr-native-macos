@@ -16,6 +16,8 @@
 
 **有限场景首帧。** Apple Silicon 真机完成三层区域计数和寻路数组初始化，两辆坦克经原版入场与绘制调用出现在同一测试窗口。启动约 6 分 56 秒后保存 1024×768 视口，测试按计划正常退出，系统登记已清空。本轮验收范围为有限测试场景的首帧。选中、移动和正常启动后载入原版地图仍在 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 跟踪。 [PR #16](https://github.com/lukecao7/yr-native-macos/pull/16)
 
+**有限场景原生输入。** 在 Apple Silicon 真机上，同一个 Mac App 使用原版规则运行有限测试场景，通过原生鼠标事件选中一辆坦克。随后点击地面，游戏逻辑从队列取出并处理了一条发给这辆坦克的移动命令。下一帧在绘制移动提示动画时停在 `0x4AEE5A`。命令处理前后及停下时，坦克的世界坐标一致。后续继续验证实际位移和画面更新。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #17](https://github.com/lukecao7/yr-native-macos/pull/17)
+
 **主线接续。** 维护者在 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 继续验证与原版安装匹配的共享数据，并把实际地图接入引擎。第二个资源包的本机打开和地图地形包读取候选已通过编译，仍待 App 运行验证。本机已核对原图的一处出生候选和相邻目标格，后续在同一 App 的实际地图中验证落位、选中和移动。
 
 ## 2026-11-05
