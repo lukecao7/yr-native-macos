@@ -10,7 +10,7 @@
 
 **默认规则的绘图设备** 在隔离实机测试中，原版主表面的创建和描述读取均已返回。读回的表面为 800×600、16 位 RGB565，每行 1,600 字节。
 
-维护者继续跟踪正常启动的原版读图、移动代价的运行状态，以及同一辆坦克的位移和下一帧显示。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+维护者继续跟踪正常启动的原版读图、移动代价的运行状态，以及同一辆坦克的位移和下一帧显示。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18)
 
 ## 2026-11-10
 
