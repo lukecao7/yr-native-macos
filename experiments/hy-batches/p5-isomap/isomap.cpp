@@ -326,10 +326,14 @@ void unpack(Map& map) {
 void cells(Map& map) {
     map.decompressed_bytes = map.raw.size();
     map.cell_count = map.raw.size() / 11;
-    if (map.raw.size() != map.expected_cells * 11) {
+    const std::size_t record_bytes = map.expected_cells * 11;
+    // The expanded stream may end with a zero DWORD after all cell records.
+    const bool has_zero_terminator = map.raw.size() == record_bytes + 4 && u32(map.raw, record_bytes) == 0;
+    if (map.raw.size() != record_bytes && !has_zero_terminator) {
         fail("cell byte length mismatch: got " + std::to_string(map.raw.size()) +
-             ", expected " + std::to_string(map.expected_cells * 11) +
-             " = (2*Map.W-1)*Map.H*11; trailing bytes=" + std::to_string(map.raw.size() % 11));
+             ", expected " + std::to_string(record_bytes) +
+             " = (2*Map.W-1)*Map.H*11 before optional zero terminator, trailing bytes=" +
+             std::to_string(map.raw.size() % 11));
     }
     std::vector<Tile> dense(map.expected_cells);
     std::vector<bool> seen(map.expected_cells, false);
