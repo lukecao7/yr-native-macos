@@ -8,11 +8,13 @@
 
 **地图地形** 受控 Mac App 在无界面和带窗口两种运行中均读到原版 MonsterM 并通过摘要比较。两次都建立了 11,398 个引擎地格和四组寻路数组，再将 16 个压缩块解开的地形记录写回同一批地格。带窗口的一轮约 14 秒，停在原版加载进度调用前，未显示游戏画面。文件和窗口均已关闭，进程与系统登记已清空。普通启动中的地图加载和对局初始化还在接入。
 
+**温带地形类型** Apple Silicon 的无界面测试使用选出的原版资源走完 82 套温带地形的主循环，在同一目录中建立 838 个主地形条目及 220 个变体。24 个瀑布和隧道地形条目关联了同一个动画类型目录。温带地形加载还需完成原版索引写入和文件清理。
+
 **有限场景移动** 在同一个 Mac 测试窗口，真实鼠标事件选中一辆坦克，原版处理了发给它的一条 Move。坦克的世界 X 坐标从 32896 增至 32922，紧邻的一帧经原版绘制显示同一辆坦克向右移 3 像素、向下移 1 像素。先关闭移动提示动画验证，再用未改动的原版规则复验。第二轮的两张实际画面都绘制了原版移动提示，间隔约 53 秒。两轮均调整了有限场景的坦克入场朝向，均在后续模拟停止后清空进程与系统登记。
 
 **默认规则的绘图设备** 在隔离实机测试中，原版主表面的创建和描述读取均已返回。读回的表面为 800×600、16 位 RGB565，每行 1,600 字节。随后用原版动画调色板完成一次动画转换表构造，写入 13,568 个表项。移动提示动画的普通帧已在有限场景的实机窗口显示，压缩帧通过了独立绘制核对。
 
-维护者继续验证正常启动进入原版 MonsterM、实际对局中的第一条移动命令，以及移动后的持续模拟。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23) · [PR #24](https://github.com/lukecao7/yr-native-macos/pull/24)
+维护者继续验证正常启动进入原版 MonsterM、实际对局中的第一条移动命令，以及移动后的持续模拟。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23) · [PR #24](https://github.com/lukecao7/yr-native-macos/pull/24) · [PR #25](https://github.com/lukecao7/yr-native-macos/pull/25)
 
 ## 2026-11-10
 
