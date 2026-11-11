@@ -12,7 +12,7 @@
 
 **默认规则的绘图设备** 在隔离实机测试中，原版主表面的创建和描述读取均已返回。读回的表面为 800×600、16 位 RGB565，每行 1,600 字节。随后用原版动画调色板完成一次动画转换表构造，写入 13,568 个表项。移动提示动画的普通帧已在有限场景的实机窗口显示，压缩帧通过了独立绘制核对。
 
-维护者继续验证正常启动进入原版 MonsterM、实际对局中的第一条移动命令，以及移动后的持续模拟。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23)
+维护者继续验证正常启动进入原版 MonsterM、实际对局中的第一条移动命令，以及移动后的持续模拟。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23) · [PR #24](https://github.com/lukecao7/yr-native-macos/pull/24)
 
 ## 2026-11-10
 
