@@ -12,13 +12,15 @@
 
 **地形素材与地图边界** 随后的无窗口测试在同一张 MonsterM 地格表上继续运行原版逻辑，核对 11,398 个地格使用的地形，按需读入 136 份地形素材，算出地图边界并释放加载缓冲。应用约 64 秒后正常退出。测试直接调用了读图后半段，普通启动中的加载进度和对局入口仍待验证。
 
+**原版地图地格查询** Apple Silicon 的无窗口测试把 MonsterM 已加载的 11,398 个地格接入 Mac 版地图查询。查询原版 1 号起点及相邻格，均返回刚加载的原地格和对应绘制数据。测试约 65 秒后正常退出。下一步是加载原版覆盖物、计算地格属性并让玩家单位入场。
+
 **有限场景移动** 在同一个 Mac 测试窗口，真实鼠标事件选中一辆坦克，原版处理了发给它的一条 Move。坦克的世界 X 坐标从 32896 增至 32922，紧邻的一帧经原版绘制显示同一辆坦克向右移 3 像素、向下移 1 像素。先关闭移动提示动画验证，再用未改动的原版规则复验。第二轮的两张实际画面都绘制了原版移动提示，间隔约 53 秒。两轮均调整了有限场景的坦克入场朝向，均在后续模拟停止后清空进程与系统登记。
 
 **默认规则的绘图设备** 在隔离实机测试中，原版主表面的创建和描述读取均已返回。读回的表面为 800×600、16 位 RGB565，每行 1,600 字节。随后用原版动画调色板完成一次动画转换表构造，写入 13,568 个表项。移动提示动画的普通帧已在有限场景的实机窗口显示，压缩帧通过了独立绘制核对。
 
 **同一签名构建的两项实测** 同一份 Apple Silicon 构建在无窗口测试中读取原版 MonsterM，写回 16 个压缩块中的 11,398 个地格，停在原版加载进度调用前。随后用同一构建运行有限场景，保留原版规则及朝东的入场参数。真实鼠标选中坦克并点击地面后，原版消费一条 Move，同一辆坦克的世界 X 坐标连续从 32896 变为 32922、32949。相邻画面显示了两次位移，四张画面的像素与前次测试一致。本轮两次画面更新间隔约 37 秒和 7.6 秒，有限场景按预定四帧正常退出。普通启动后的 MonsterM 对局仍在接入。
 
-维护者继续验证正常启动进入原版 MonsterM、实际对局中的第一条移动命令，以及移动后的持续模拟。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23) · [PR #24](https://github.com/lukecao7/yr-native-macos/pull/24) · [PR #25](https://github.com/lukecao7/yr-native-macos/pull/25) · [PR #26](https://github.com/lukecao7/yr-native-macos/pull/26) · [PR #27](https://github.com/lukecao7/yr-native-macos/pull/27) · [PR #28](https://github.com/lukecao7/yr-native-macos/pull/28)
+维护者继续验证正常启动进入原版 MonsterM、实际对局中的第一条移动命令，以及移动后的持续模拟。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23) · [PR #24](https://github.com/lukecao7/yr-native-macos/pull/24) · [PR #25](https://github.com/lukecao7/yr-native-macos/pull/25) · [PR #26](https://github.com/lukecao7/yr-native-macos/pull/26) · [PR #27](https://github.com/lukecao7/yr-native-macos/pull/27) · [PR #28](https://github.com/lukecao7/yr-native-macos/pull/28) · [PR #29](https://github.com/lukecao7/yr-native-macos/pull/29)
 
 ## 2026-11-10
 
