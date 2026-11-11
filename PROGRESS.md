@@ -16,13 +16,19 @@
 
 **地格属性的输入** 同一次 Apple Silicon 无窗口测试从原版 MonsterM 解出覆盖物类型和帧两张表，每张 262,144 字节，与独立解码结果一致。起点两格的覆盖物条目为空，并从同一份原地形素材读到平地和 60×30 的图块尺寸。另一个原版坡地读到坡度 3 和 60×45 的尺寸。应用约 65 秒后正常退出。覆盖物对象放置、整图地格属性写回及玩家单位入场仍待验证。
 
+**原版起点的属性写回** 无窗口测试在同一次 MonsterM 运行中加载默认规则的 250 项覆盖物类型，并用地图编号回读到首个类型对象。原版地格属性逻辑在 1 号起点和相邻格完成，地形、坡度和地格分类写回原来的地格，缓存保留原高度。覆盖物对象放置和整图属性写回仍待验证。
+
+**原版航点** 同一次无窗口测试用原版航点读取逻辑写回场景的 702 个位置。其中 37 个原图航点都在同一批原地格上写入标记。起点地格属性和首个覆盖物文件复验通过，测试约 68 秒后正常退出。
+
+**首个覆盖物的素材** 同一 Mac 测试沿原图编号和默认 Art 选择温带图像文件。实际读取的 4,336 字节与本机原版档案成员一致。文件头记录 24 帧，地图指定的第 6 帧边界核对通过。文件完成清理，起点两格属性复验通过。原版类型的图像绑定和覆盖物放置仍待接入。
+
 **有限场景移动** 在同一个 Mac 测试窗口，真实鼠标事件选中一辆坦克，原版处理了发给它的一条 Move。坦克的世界 X 坐标从 32896 增至 32922，紧邻的一帧经原版绘制显示同一辆坦克向右移 3 像素、向下移 1 像素。先关闭移动提示动画验证，再用未改动的原版规则复验。第二轮的两张实际画面都绘制了原版移动提示，间隔约 53 秒。两轮均调整了有限场景的坦克入场朝向，均在后续模拟停止后清空进程与系统登记。
 
 **默认规则的绘图设备** 在隔离实机测试中，原版主表面的创建和描述读取均已返回。读回的表面为 800×600、16 位 RGB565，每行 1,600 字节。随后用原版动画调色板完成一次动画转换表构造，写入 13,568 个表项。移动提示动画的普通帧已在有限场景的实机窗口显示，压缩帧通过了独立绘制核对。
 
-**同一签名构建的两项实测** 同一份 Apple Silicon 构建在无窗口测试中读取原版 MonsterM，写回 16 个压缩块中的 11,398 个地格，停在原版加载进度调用前。随后用同一构建运行有限场景，保留原版规则及朝东的入场参数。真实鼠标选中坦克并点击地面后，原版消费一条 Move，同一辆坦克的世界 X 坐标连续从 32896 变为 32922、32949。相邻画面显示了两次位移，四张画面的像素与前次测试一致。本轮两次画面更新间隔约 37 秒和 7.6 秒，有限场景按预定四帧正常退出。普通启动后的 MonsterM 对局仍在接入。
+**同一签名构建的两项实测** 同一份 Apple Silicon 构建先在无窗口测试中完成原版 MonsterM 起点两格的属性写回，约 66 秒后正常退出。随后用同一构建运行默认规则的有限场景，使用朝东的坦克入场参数。真实鼠标选中坦克并点击地面后，原版消费一条 Move，同一辆坦克的世界 X 坐标连续从 32896 变为 32922、32949。相邻画面显示了两次位移，间隔约 39 秒和 7.5 秒。四张画面的像素与前次测试一致。有限场景按预定四帧正常退出，窗口、进程组和系统登记均已回收。普通启动后的 MonsterM 对局仍在接入。
 
-维护者继续验证正常启动进入原版 MonsterM、实际对局中的第一条移动命令，以及移动后的持续模拟。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23) · [PR #24](https://github.com/lukecao7/yr-native-macos/pull/24) · [PR #25](https://github.com/lukecao7/yr-native-macos/pull/25) · [PR #26](https://github.com/lukecao7/yr-native-macos/pull/26) · [PR #27](https://github.com/lukecao7/yr-native-macos/pull/27) · [PR #28](https://github.com/lukecao7/yr-native-macos/pull/28) · [PR #29](https://github.com/lukecao7/yr-native-macos/pull/29) · [PR #30](https://github.com/lukecao7/yr-native-macos/pull/30)
+**本轮收尾** 实机验证已结束。维护者在 Demo 任务中跟踪配套启动数据、原版地图覆盖物放置、玩家单位入场和第一条移动命令。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [PR #18](https://github.com/lukecao7/yr-native-macos/pull/18) · [PR #19](https://github.com/lukecao7/yr-native-macos/pull/19) · [PR #20](https://github.com/lukecao7/yr-native-macos/pull/20) · [PR #21](https://github.com/lukecao7/yr-native-macos/pull/21) · [PR #22](https://github.com/lukecao7/yr-native-macos/pull/22) · [PR #23](https://github.com/lukecao7/yr-native-macos/pull/23) · [PR #24](https://github.com/lukecao7/yr-native-macos/pull/24) · [PR #25](https://github.com/lukecao7/yr-native-macos/pull/25) · [PR #26](https://github.com/lukecao7/yr-native-macos/pull/26) · [PR #27](https://github.com/lukecao7/yr-native-macos/pull/27) · [PR #28](https://github.com/lukecao7/yr-native-macos/pull/28) · [PR #29](https://github.com/lukecao7/yr-native-macos/pull/29) · [PR #30](https://github.com/lukecao7/yr-native-macos/pull/30) · [PR #31](https://github.com/lukecao7/yr-native-macos/pull/31) · [PR #32](https://github.com/lukecao7/yr-native-macos/pull/32)
 
 ## 2026-11-10
 
