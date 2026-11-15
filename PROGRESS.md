@@ -2,6 +2,14 @@
 
 按北京时间记录实际工作的日期，最近的在前。收工时由维护者核对当天可公开的代码、测试和受影响的说明。每条日结列出已合并的 PR、验证结果，以及还有谁在做什么。跨日任务留在对应的 Issue 或草稿 PR，方便下一位贡献者接手。[开发路线图](ROADMAP.md) · [认领任务](CONTRIBUTING.md)
 
+## 2026-11-16
+
+本轮合入了 MonsterM 的雷达、首条步兵记录、原图规则覆盖、实际玩家阵营、首个步兵的构造与入场，以及阵营和完整地形同场的路线图。 [PR #37](https://github.com/lukecao7/yr-native-macos/pull/37) · [PR #38](https://github.com/lukecao7/yr-native-macos/pull/38) · [PR #39](https://github.com/lukecao7/yr-native-macos/pull/39) · [PR #40](https://github.com/lukecao7/yr-native-macos/pull/40) · [PR #41](https://github.com/lukecao7/yr-native-macos/pull/41) · [PR #42](https://github.com/lukecao7/yr-native-macos/pull/42) · [PR #43](https://github.com/lukecao7/yr-native-macos/pull/43) · [PR #44](https://github.com/lukecao7/yr-native-macos/pull/44)
+
+带窗口的 Apple Silicon 运行从原图建立了实际雷达表面，遍历 11,398 个地格并计算 9,642 格颜色。独立无窗口运行完成首个预置步兵的原版入场，核实了同一实体的原图坐标、子格占用、绘制图层、逻辑登记和周围八格计数。最后一次无窗口运行在玩家、一个所选 AI 和中立阵营都存在时，复验了 1,290 个覆盖物、11,398 格属性、298 个地形对象及两组矿石队列。同次完成首个步兵的原版入场和绘制排序，地面层共 299 个对象，步兵顺序与原版对照一致。运行后受管进程全部清理。
+
+主线接续首条步兵的原版 Tag 和任务字段、其余八条预置步兵、正常启动后的完整读图和同一辆坦克的鼠标选择、Move、位移及后续一帧。普通启动仍待匹配固定版本的真实启动器交付。一期在同一 Mac App 的千单位多核对局仍待验证。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+
 ## 2026-11-15
 
 **MonsterM 覆盖物** Apple Silicon 的一次无窗口实测使用默认规则，按原图顺序处理了全部 1,290 个覆盖物条目、10 种类型，经过矿石、宝石、岩石和坡道分支。地图指定的帧数据写回并逐格读回了 11,398 个原地格。随后释放了 1,290 个临时对象，待删除队列和活跃对象表都已清空。测试用时约 5 分 35 秒，进程正常退出。 [PR #33](https://github.com/lukecao7/yr-native-macos/pull/33)
