@@ -16,7 +16,7 @@
 
 **开局部队和原版相机** Apple Silicon 带窗口测试在同一张原版 MonsterM 使用默认 Battle 规则和受控阵营及颜色。真人与 AI 各生成一辆基地车、五辆灰熊和五名 GI，开局预算各从 4,500 扣到 0，九名原图预置步兵仍在图上。相机读取真人十一件开局单位的位置，在绑定真实 Mac 窗口的同一个 1024×768 绘制表面画出 951 格地表。后续同场测试遍历地面层 329 个对象，绘出当前视野的 21 棵静态树，颜色和深度各有 12,447 个像素发生变化。原版树木阴影分支全部返回，阴影像素变化为零。同一窗口表面绘出首辆开局灰熊的车体、炮塔、炮管和阴影，测得 964 个颜色像素变化。绘制对象是原图 (132,83) 的同一辆坦克。游戏画面尚未送到窗口，原版运行时和 Mac 进程均已清理。 [PR #67](https://github.com/lukecao7/yr-native-macos/pull/67) · [PR #68](https://github.com/lukecao7/yr-native-macos/pull/68) · [PR #69](https://github.com/lukecao7/yr-native-macos/pull/69) · [PR #70](https://github.com/lukecao7/yr-native-macos/pull/70) · [PR #72](https://github.com/lukecao7/yr-native-macos/pull/72) · [PR #73](https://github.com/lukecao7/yr-native-macos/pull/73) · [PR #74](https://github.com/lukecao7/yr-native-macos/pull/74) · [PR #75](https://github.com/lukecao7/yr-native-macos/pull/75)
 
-**坦克命中表与步兵动画** 同一窗口诊断将首辆灰熊登记到原版鼠标命中表，读回窗口坐标 (514,588)。首名 GI 从实际动作序列和朝向得到原版 GI.SHP 的帧索引 7，配色来自本方阵营及同一窗口的颜色转换。当前结果包含坦克登记与步兵选帧，玩家点选与步兵像素绘制待接续。 [PR #76](https://github.com/lukecao7/yr-native-macos/pull/76) · [PR #77](https://github.com/lukecao7/yr-native-macos/pull/77)
+**坦克命中表与步兵动画** 同一窗口诊断将首辆灰熊登记到原版鼠标命中表，读回窗口坐标 (514,588)。首名 GI 从实际动作序列和朝向得到原版 GI.SHP 的帧索引 7，配色来自本方阵营及同一窗口的颜色转换。同一 GI 的绘制入口接到原版载入状态读取。玩家实际点选和步兵像素绘制仍待接续。 [PR #76](https://github.com/lukecao7/yr-native-macos/pull/76) · [PR #77](https://github.com/lukecao7/yr-native-macos/pull/77)
 
 **原图第二遍地格** 在一次独立无窗口运行中，原版流程完成两遍各 11,398 格，将 1,273 个含矿地格的总价值 429,175 写回同一张地图。独立读取原图重算得到同一结果。加载进度、信标和完整读图返回待接续。 [PR #71](https://github.com/lukecao7/yr-native-macos/pull/71)
 
