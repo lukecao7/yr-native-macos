@@ -14,7 +14,13 @@
 
 **起点与灰熊坦克** 使用地图选择器的受控场景和明确的阵营、颜色选项。在原图的八个开局坐标中，真人按原版抽取 (128,79)，AI 从余下位置择远到 (26,77)。实测把坐标写入各自阵营。后续使用实际原图和同一规则读入 80 种载具及 65 种步兵，按开局条件选出灰熊坦克和一项步兵候选，计算开局预算 4,500。读入原版车体、炮塔和炮管后，实测由原版工厂创建本方灰熊，读回生命值 300、造价 700，并正常退出。后续一次运行同时复验全部覆盖物、地格属性、298 个地形对象及矿石队列，补齐同层地形读取后，最后一轮在原图让同一辆灰熊经原版入场落到 (128,79)，登记到地面绘制层，从开局预算扣减 700，并设为原版 Guard。整轮约 8 分 51 秒，正常退出及清理。此轮基地车和可见游戏帧仍待。 [PR #59](https://github.com/lukecao7/yr-native-macos/pull/59) · [PR #60](https://github.com/lukecao7/yr-native-macos/pull/60) · [PR #61](https://github.com/lukecao7/yr-native-macos/pull/61) · [PR #62](https://github.com/lukecao7/yr-native-macos/pull/62) · [PR #63](https://github.com/lukecao7/yr-native-macos/pull/63) · [PR #64](https://github.com/lukecao7/yr-native-macos/pull/64) · [PR #65](https://github.com/lukecao7/yr-native-macos/pull/65)
 
-**接续** 主线维护者 `@lukecao7` 继续打通普通启动的原版加载界面、正常遭遇战菜单、基地车及其余开局单位。验收还需要在同一个 Mac App 的原图对局里看到真实鼠标选中、原版 Move、同一坦克位移和下一帧。普通启动仍缺匹配固定游戏版本的启动器交付，一期仍待验证千单位的多核对局。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+**开局部队和原版相机** Apple Silicon 带窗口测试在同一张原版 MonsterM 使用默认 Battle 规则和受控阵营及颜色。真人与 AI 各生成一辆基地车、五辆灰熊和五名 GI，开局预算各从 4,500 扣到 0，九名原图预置步兵仍在图上。相机读取真人十一件开局单位的位置，在绑定真实 Mac 窗口的同一个 1024×768 绘制表面画出 951 格地表。后续同场测试遍历地面层 329 个对象，绘出当前视野的 21 棵静态树，颜色和深度各有 12,447 个像素发生变化。原版树木阴影分支全部返回，阴影像素变化为零。同一窗口表面绘出首辆开局灰熊的车体、炮塔、炮管和阴影，测得 964 个颜色像素变化。绘制对象是原图 (132,83) 的同一辆坦克。游戏画面尚未送到窗口，原版运行时和 Mac 进程均已清理。 [PR #67](https://github.com/lukecao7/yr-native-macos/pull/67) · [PR #68](https://github.com/lukecao7/yr-native-macos/pull/68) · [PR #69](https://github.com/lukecao7/yr-native-macos/pull/69) · [PR #70](https://github.com/lukecao7/yr-native-macos/pull/70) · [PR #72](https://github.com/lukecao7/yr-native-macos/pull/72) · [PR #73](https://github.com/lukecao7/yr-native-macos/pull/73) · [PR #74](https://github.com/lukecao7/yr-native-macos/pull/74) · [PR #75](https://github.com/lukecao7/yr-native-macos/pull/75)
+
+**坦克命中表与步兵动画** 同一窗口诊断将首辆灰熊登记到原版鼠标命中表，读回窗口坐标 (514,588)。首名 GI 从实际动作序列和朝向得到原版 GI.SHP 的帧索引 7，配色来自本方阵营及同一窗口的颜色转换。同一 GI 的绘制入口接到原版载入状态读取。玩家实际点选和步兵像素绘制仍待接续。 [PR #76](https://github.com/lukecao7/yr-native-macos/pull/76) · [PR #77](https://github.com/lukecao7/yr-native-macos/pull/77)
+
+**原图第二遍地格** 在一次独立无窗口运行中，原版流程完成两遍各 11,398 格，将 1,273 个含矿地格的总价值 429,175 写回同一张地图。独立读取原图重算得到同一结果。加载进度、信标和完整读图返回待接续。 [PR #71](https://github.com/lukecao7/yr-native-macos/pull/71)
+
+**接续** 主线维护者 `@lukecao7` 继续接步兵绘制、原版混合物件层和整帧呈现。普通启动仍缺匹配固定游戏版本的启动器交付回执。Demo 验收需要在同一个正常启动的 Mac App 原版 MonsterM 对局里，用真实鼠标选中一辆坦克，让原版消费 Move，并看到同一辆坦克实际位移和下一帧。千单位的多核对局仍待验证。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
 
 ## 2026-11-15
 
