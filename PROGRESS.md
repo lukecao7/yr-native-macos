@@ -2,6 +2,12 @@
 
 按北京时间记录实际工作的日期，最近的在前。收工时由维护者核对当天可公开的代码、测试和受影响的说明。每条日结列出已合并的 PR、验证结果，以及还有谁在做什么。跨日任务留在对应的 Issue 或草稿 PR，方便下一位贡献者接手。[开发路线图](ROADMAP.md) · [认领任务](CONTRIBUTING.md)
 
+## 2026-11-17
+
+**原图灰熊首动** 同一张 MonsterM 使用默认规则，带窗口诊断完成原版小地图初始化。两组系统鼠标事件先选中本方一辆灰熊，再向北侧相邻格发送 Move。原版消费一条指令，随后同一辆坦克的 Y 坐标减少了 26 个游戏坐标单位，X 和高度保持原值。同一个窗口沿用开局相机重绘，车身从窗口坐标 (514,588) 移到 (517,586)。回读的 1024×768 视口与实际绘制缓冲逐像素一致。车辆更新在位移之后停住，完整对局帧仍待实测。窗口、进程和系统登记已清理。
+
+**接续** 主线维护者 `@lukecao7` 负责普通启动和当前地图的完整对局帧。[Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+
 ## 2026-11-16
 
 本轮合入了 MonsterM 的雷达、首条步兵记录、原图规则覆盖、实际玩家阵营、首个步兵的构造与入场，以及阵营和完整地形同场的路线图。 [PR #37](https://github.com/lukecao7/yr-native-macos/pull/37) · [PR #38](https://github.com/lukecao7/yr-native-macos/pull/38) · [PR #39](https://github.com/lukecao7/yr-native-macos/pull/39) · [PR #40](https://github.com/lukecao7/yr-native-macos/pull/40) · [PR #41](https://github.com/lukecao7/yr-native-macos/pull/41) · [PR #42](https://github.com/lukecao7/yr-native-macos/pull/42) · [PR #43](https://github.com/lukecao7/yr-native-macos/pull/43) · [PR #44](https://github.com/lukecao7/yr-native-macos/pull/44)
@@ -23,6 +29,8 @@
 **原版开局画面和点选** Apple Silicon 上的同一次带窗口诊断跑完原版两遍混合物件层、效果和战术绘制尾段，并解锁原来那块绘制表面。恢复原版树木默认耐久后，视野里的 21 棵静态树绘出树冠和阴影。1024×768 的窗口视口和原版绘制缓冲逐像素一致。向窗口发出一次原生鼠标按下和抬起，原版选择逻辑正常返回，选择表只有画面里的同一辆本方灰熊。运行正常退出，窗口、进程和系统登记清空。 [PR #79](https://github.com/lukecao7/yr-native-macos/pull/79) · [PR #80](https://github.com/lukecao7/yr-native-macos/pull/80) · [PR #81](https://github.com/lukecao7/yr-native-macos/pull/81) · [PR #82](https://github.com/lukecao7/yr-native-macos/pull/82) · [PR #83](https://github.com/lukecao7/yr-native-macos/pull/83)
 
 **原版寻路和开局逻辑** 在同一次带窗口开局完成两遍各 11,398 格更新及原版三档通行区域计算。原版选择流程随后通过系统鼠标选中画面里的灰熊。原版通行判断用实际选中的坦克和同一张地图的寻路表比较，确认它所在格与北侧相邻格同属一个普通地面通行区。这次未投递地面 Move。另一次同图测试按原版顺序完成 12 棵矿树的逻辑更新。首名预置步兵保持原任务，通用 AI 读回它的军衔和所在物理格，确认当时未隐藏。随后复验完成同一对象的计时累加和对象 AI，进入原版区域警戒任务。完整对局逻辑帧待接续。
+
+**原图移动指令** 带窗口诊断在失焦后恢复前台。同一个 Mac 窗口接收两组系统鼠标事件，先选中本方灰熊，再向北侧相邻格发出 Move。原版消费了发给同一辆坦克的指令。首次车辆更新停在缺失的小地图绘图表面，原坐标保持不变。
 
 **接续** 主线维护者 `@lukecao7` 继续接入普通启动和原版对局帧，验证默认规则下的 Move。正常启动仍缺与固定游戏版本匹配的启动器数据。验收需要在同一个正常启动的 Mac App 原版 MonsterM 对局中完成真实点选、原版 Move 消费、同一辆坦克的实际位移及下一幅画面。千单位的多核对局仍待验证。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
 
