@@ -8,7 +8,13 @@
 
 带窗口的 Apple Silicon 运行从原图建立了实际雷达表面，遍历 11,398 个地格并计算 9,642 格颜色。独立无窗口运行完成首个预置步兵的原版入场，核实了同一实体的原图坐标、子格占用、绘制图层、逻辑登记和周围八格计数。最后一次无窗口运行在玩家、一个所选 AI 和中立阵营都存在时，复验了 1,290 个覆盖物、11,398 格属性、298 个地形对象及两组矿石队列。同次完成首个步兵的原版入场和绘制排序，地面层共 299 个对象，步兵顺序与原版对照一致。运行后受管进程全部清理。
 
-主线接续首条步兵的原版 Tag 和任务字段、其余八条预置步兵、正常启动后的完整读图和同一辆坦克的鼠标选择、Move、位移及后续一帧。普通启动仍待匹配固定版本的真实启动器交付。一期在同一 Mac App 的千单位多核对局仍待验证。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+**预置步兵与触发条目** 后续无窗口实测在 11,398 格的同一 MonsterM 上放置了全部 9 个原图预置步兵和 298 个地形对象。读取原图 11 个标记、11 个触发器、11 个事件和 51 项动作。同一运行核对了地图规则覆盖和矿石队列，正常退出并清理。触发器在完整对局中的行为仍待验证。 [PR #46](https://github.com/lukecao7/yr-native-macos/pull/46) · [PR #47](https://github.com/lukecao7/yr-native-macos/pull/47) · [PR #48](https://github.com/lukecao7/yr-native-macos/pull/48) · [PR #49](https://github.com/lukecao7/yr-native-macos/pull/49)
+
+**遭遇战读图和开局** 无窗口实测登记一名玩家、一个所选 AI、Neutral 和 Special，加载九种原版游戏模式及十四个国家。Battle 设置成为当前模式，原版选项函数读完本机配置并正常返回。另一次运行回读开局单位数 10、资金 10,000 和科技等级 10，把同一玩家登记到本局。 [PR #50](https://github.com/lukecao7/yr-native-macos/pull/50) · [PR #51](https://github.com/lukecao7/yr-native-macos/pull/51) · [PR #52](https://github.com/lukecao7/yr-native-macos/pull/52) · [PR #53](https://github.com/lukecao7/yr-native-macos/pull/53) · [PR #54](https://github.com/lukecao7/yr-native-macos/pull/54) · [PR #55](https://github.com/lukecao7/yr-native-macos/pull/55) · [PR #56](https://github.com/lukecao7/yr-native-macos/pull/56) · [PR #57](https://github.com/lukecao7/yr-native-macos/pull/57) · [PR #58](https://github.com/lukecao7/yr-native-macos/pull/58)
+
+**起点与灰熊坦克** 使用地图选择器的受控场景和明确的阵营、颜色选项。在原图的八个开局坐标中，真人按原版抽取 (128,79)，AI 从余下位置择远到 (26,77)。实测把坐标写入各自阵营。后续使用实际原图和同一规则读入 80 种载具及 65 种步兵，按开局条件选出灰熊坦克和一项步兵候选，计算开局预算 4,500。读入原版车体、炮塔和炮管后，实测由原版工厂创建本方灰熊，读回生命值 300、造价 700，并正常退出。后续一次运行同时复验全部覆盖物、地格属性、298 个地形对象及矿石队列，补齐同层地形读取后，最后一轮在原图让同一辆灰熊经原版入场落到 (128,79)，登记到地面绘制层，从开局预算扣减 700，并设为原版 Guard。整轮约 8 分 51 秒，正常退出及清理。此轮基地车和可见游戏帧仍待。 [PR #59](https://github.com/lukecao7/yr-native-macos/pull/59) · [PR #60](https://github.com/lukecao7/yr-native-macos/pull/60) · [PR #61](https://github.com/lukecao7/yr-native-macos/pull/61) · [PR #62](https://github.com/lukecao7/yr-native-macos/pull/62) · [PR #63](https://github.com/lukecao7/yr-native-macos/pull/63) · [PR #64](https://github.com/lukecao7/yr-native-macos/pull/64) · [PR #65](https://github.com/lukecao7/yr-native-macos/pull/65)
+
+**接续** 主线维护者 `@lukecao7` 继续打通普通启动的原版加载界面、正常遭遇战菜单、基地车及其余开局单位。验收还需要在同一个 Mac App 的原图对局里看到真实鼠标选中、原版 Move、同一坦克位移和下一帧。普通启动仍缺匹配固定游戏版本的启动器交付，一期仍待验证千单位的多核对局。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
 
 ## 2026-11-15
 
