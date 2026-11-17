@@ -8,7 +8,7 @@
 
 **原版 Scene 绘制表面** 独立带窗口实测接通真实窗口参数、原版表面构造、软件清屏和静态绘制，沿用同一块 RGB565 画布。系统锁屏后，该轮等待窗口首帧呈现，随后结束并清理进程。本轮的路线像素和鼠标操作待桌面恢复后复验。
 
-**接续** 主线维护者 `@lukecao7` 继续接入任务计时、正式帧内输入和整张地图的对局循环。普通启动仍需要与固定版本匹配的启动器数据。千单位多核对局仍待验证。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [本轮记录 PR #87](https://github.com/lukecao7/yr-native-macos/pull/87)
+**接续** 主线维护者 `@lukecao7` 继续接入通用 AI 后续更新、正式帧内输入和整张地图的对局循环。普通启动仍需要与固定版本匹配的启动器数据。千单位多核对局仍待验证。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) · [本轮记录 PR #87](https://github.com/lukecao7/yr-native-macos/pull/87) · [任务计时 PR #88](https://github.com/lukecao7/yr-native-macos/pull/88)
 
 ## 2026-11-17
 
