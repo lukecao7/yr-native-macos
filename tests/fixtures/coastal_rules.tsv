@@ -1,0 +1,12 @@
+COASTAL_RULES	1
+economy	900	24	8
+kind	hp	cost	train_ticks	move_period	vision	range	damage	armor	shot_period	power
+Pioneer	125	0	0	3	8	0	0	1	0	0
+Hub	230	0	0	0	9	0	0	6	0	10
+Generator	115	120	0	0	5	0	0	2	0	38
+Depot	150	150	0	0	5	0	0	3	0	-8
+Workshop	170	210	0	0	6	0	0	4	0	-18
+Collector	100	80	42	3	5	0	0	2	0	0
+Skirmisher	72	85	32	2	8	4	18	1	24	0
+Sentinel	122	140	48	3	7	3	22	7	25	0
+Artillery	75	180	56	4	11	9	36	2	30	0
