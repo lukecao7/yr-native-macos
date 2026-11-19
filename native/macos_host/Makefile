@@ -28,6 +28,8 @@ $(mac_host_obj)/%.o: $(mac_host_dir)/%.cpp $(mac_host_headers) | $(mac_host_obj)
 $(mac_host_obj)/%.o: $(mac_host_dir)/%.mm $(mac_host_headers) | $(mac_host_obj)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(mac_host_flags) -fobjc-arc -c $< -o $@
 
+$(mac_host_obj)/engine_session.o: $(rts_headers)
+
 $(mac_host_obj)/fixture.o: tests/macos_host_fixture.cpp $(mac_host_headers) | $(mac_host_obj)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(mac_host_flags) -c $< -o $@
 
@@ -47,10 +49,10 @@ $(mac_host_obj)/data_directory_test: tests/macos_host_data_directory_test.mm $(m
 $(mac_host_obj)/input_view_test: tests/macos_host_input_view_test.mm $(mac_host_obj)/input_view.o $(mac_host_headers) | $(mac_host_obj)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(mac_host_flags) -fobjc-arc $(filter %.mm %.o,$^) $(mac_host_frameworks) -o $@
 
-$(mac_host_app)/$(mac_host_executable): $(mac_host_common) $(mac_host_obj)/unavailable_session.o $(mac_host_dir)/Info.plist
+$(mac_host_app)/$(mac_host_executable): $(mac_host_common) $(mac_host_obj)/engine_session.o $(rts_lib) build/libnavigation.a $(mac_host_dir)/Info.plist
 	mkdir -p $(mac_host_app)/Contents/MacOS
 	cp $(mac_host_dir)/Info.plist $(mac_host_app)/Contents/Info.plist
-	$(CXX) $(CXXFLAGS) $(filter %.o,$^) $(mac_host_frameworks) -o $@
+	$(CXX) $(CXXFLAGS) $(filter %.o %.a,$^) $(mac_host_frameworks) -o $@
 	/usr/bin/codesign --force --sign - $(mac_host_app)
 
 $(mac_host_fixture_app)/$(mac_host_executable): $(mac_host_common) $(mac_host_obj)/fixture.o $(mac_host_dir)/Info.plist

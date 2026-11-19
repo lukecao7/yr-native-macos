@@ -30,4 +30,5 @@ check:
 test: $(test_bins)
 	@set -e; for program in $(test_bins); do ./$$program; done
 
+include native/rts_core/Makefile
 include native/macos_host/Makefile

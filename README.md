@@ -42,7 +42,7 @@ make
 
 ## macOS 独立宿主测试
 
-在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主，检查启动参数、目录设置、只读 MIX 档案、帧调度、像素呈现及输入回放。目录测试用两个进程验证首次选择持久化和无目录参数重启。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略 `--data-dir` 时，宿主优先打开上次通过系统选择器选定的目录。首次启动或目录失效时会打开选择器。显式参数只对当次运行生效。正式地图需要接入可调用的对局运行时。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主，检查启动参数、目录设置、只读 MIX 档案、帧调度、像素呈现及输入回放。目录测试用两个进程验证首次选择持久化和无目录参数重启。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略 `--data-dir` 时，宿主优先打开上次通过系统选择器选定的目录。首次启动或目录失效时会打开选择器。显式参数只对当次运行生效。当前宿主的通用运行时读取下文的自制规则和地图。
 
 以下命令用自制档案启动测试窗口。左键拖动绘制选框，Shift、Ctrl、Cmd 会改变边框颜色。右键清除选框并移动色块，空格切换色块颜色，滚轮平移，Ctrl 加滚轮缩放，指针靠近窗口边缘时平移。按 Cmd+Q 或关闭窗口退出。
 
@@ -55,6 +55,30 @@ python3 tests/macos_host_fixture_data.py "$fixture_dir"
 ./build/CoastalHostFixture.app/Contents/MacOS/CoastalMacHost \
   --data-dir "$fixture_dir" --skirmish-map Fixture.map
 ```
+
+## 运行自制等距对局
+
+`make rts-test` 会验证地图、绘制、采集、交火、存档和回放，并用脚本完整跑完一局 1v1。用同一份地图和规则可打开 Mac 窗口。
+
+```sh
+make macos-host
+match_dir=$(mktemp -d)
+python3 tests/rts_fixture_data.py "$match_dir"
+./build/CoastalHost.app/Contents/MacOS/CoastalMacHost \
+  --data-dir "$match_dir" --skirmish-map Basin.map --strict-audit
+```
+
+你操控蓝方，铜方按固定脚本生产并进攻。档案保存在数据目录的 `CoastalHost.snapshot`。右键可退出建造预览，靠近窗口边缘、用方向键或滚轮可移动相机，Ctrl 加滚轮缩放。
+
+| 操作 | 键鼠 |
+| --- | --- |
+| 部署基地、选择建造位置 | D 部署。G 发电站、M 矿场、W 工坊，按键后左击地格放置。 |
+| 生产与集结 | C 采集车、Q 轻型机动单位、E 重甲单位、R 远程单位。P 暂停或继续，U 取消队尾并退款，T 后左击设集结点。 |
+| 选择与编队 | 点选或左键拖框，Shift 追加。Ctrl+1–9 保存编队，1–9 调用。 |
+| 下令 | 右键移动，Shift+右键边走边攻击，H 驻守，空格定位所选单位或基地。 |
+| 存读档 | F5 保存，F9 读取。 |
+
+自制 `COASTAL_MAP` 文本地图使用 `.` 平地、`/` 坡道、`=` 高地、`~` 水面、`#` 障碍、`o` 矿点、`a` 和 `b` 两方出生格。`coastal_rules.tsv` 保存造价、生命、速度、视野、伤害和生产参数。
 
 ## 一起开发
 
