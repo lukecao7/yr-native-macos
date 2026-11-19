@@ -22,6 +22,9 @@ std::optional<LaunchOptions> parse_launch_options(
 std::optional<std::filesystem::path> validate_data_directory(
     const std::filesystem::path& path, std::string& error);
 
+// Reads the containing macOS app's most recent valid picker selection.
+std::optional<std::filesystem::path> load_saved_data_directory();
+
 // AppKit main thread only. An empty result with an empty error denotes cancellation.
 std::optional<std::filesystem::path> choose_data_directory(std::string& error);
 

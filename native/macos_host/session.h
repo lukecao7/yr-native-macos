@@ -5,6 +5,7 @@
 #include "launch_options.h"
 
 #include <memory>
+#include <span>
 
 namespace coastal::macos_host {
 
@@ -15,8 +16,11 @@ struct Viewport {
 
 struct Frame {
     FrameCommit commit;
-    // Tightly packed, top-left origin, opaque RGBA8. Valid until the next advance.
+    // Tightly packed, top-left origin, opaque RGBA8. Without an owner, valid until the next advance.
     std::span<const std::uint8_t> rgba;
+    // An optional owner for the pixel storage. When supplied, the span must stay
+    // valid and its bytes unchanged until the last reference is released.
+    std::shared_ptr<const void> rgba_owner{};
 };
 
 struct PointerEvent {

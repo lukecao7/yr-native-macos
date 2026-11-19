@@ -2,7 +2,7 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 
-#include "session.h"
+#include "frame_image.h"
 
 #include <algorithm>
 #include <exception>
@@ -70,7 +70,7 @@ void install_quit_menu(NSApplication* application) {
 
 @interface CoastalFrameView : NSView
 - (instancetype)initWithFrame:(NSRect)rect session:(host::Session*)session;
-- (BOOL)presentRGBA:(std::span<const std::uint8_t>)rgba;
+- (BOOL)presentFrame:(const host::Frame&)frame;
 @end
 
 @implementation CoastalFrameView {
@@ -98,18 +98,8 @@ void install_quit_menu(NSApplication* application) {
 
 - (BOOL)isOpaque { return YES; }
 
-- (BOOL)presentRGBA:(std::span<const std::uint8_t>)rgba {
-    const auto rowBytes = std::size_t(_viewport.width) * 4;
-    if (rgba.size() != rowBytes * _viewport.height) return NO;
-    auto* data = CFDataCreate(kCFAllocatorDefault, rgba.data(), static_cast<CFIndex>(rgba.size()));
-    if (!data) return NO;
-    auto* provider = CGDataProviderCreateWithCFData(data);
-    CFRelease(data);
-    if (!provider) return NO;
-    auto* image = CGImageCreate(_viewport.width, _viewport.height, 8, 32, rowBytes,
-                                _colorSpace, CGBitmapInfo(kCGImageAlphaNoneSkipLast) | kCGBitmapByteOrder32Big,
-                                provider, nullptr, false, kCGRenderingIntentDefault);
-    CGDataProviderRelease(provider);
+- (BOOL)presentFrame:(const host::Frame&)frame {
+    auto* image = host::create_rgba_frame_image(_viewport, frame, _colorSpace);
     if (!image) return NO;
     if (_image) CGImageRelease(_image);
     _image = image;
@@ -210,7 +200,8 @@ void install_quit_menu(NSApplication* application) {
                 if (!_window.visible || _window.miniaturized) return std::nullopt;
                 const auto frame = _session->advance_frame();
                 if (!frame) return std::nullopt;
-                if (![_surface presentRGBA:frame->rgba]) throw std::runtime_error("Could not draw a session frame.");
+                if (!_loop->accepts_frame(frame->commit)) return frame->commit;
+                if (![_surface presentFrame:*frame]) throw std::runtime_error("Could not draw a session frame.");
                 return frame->commit;
             });
             if (_stopped) return;
@@ -279,17 +270,19 @@ int main(int argc, char** argv) {
             }
 
             NSApplication* application = nil;
-            if (options->data_directory.empty()) {
+            if (!options->data_directory.empty()) {
+                auto directory = host::validate_data_directory(options->data_directory, error);
+                if (!directory) return startup_error(error);
+                options->data_directory = std::move(*directory);
+            } else if (auto savedDirectory = host::load_saved_data_directory()) {
+                options->data_directory = std::move(*savedDirectory);
+            } else {
                 application = [NSApplication sharedApplication];
                 [application setActivationPolicy:NSApplicationActivationPolicyRegular];
                 [application finishLaunching];
                 [application activateIgnoringOtherApps:YES];
                 auto directory = host::choose_data_directory(error);
                 if (!directory) return error.empty() ? 0 : startup_error(error);
-                options->data_directory = std::move(*directory);
-            } else {
-                auto directory = host::validate_data_directory(options->data_directory, error);
-                if (!directory) return startup_error(error);
                 options->data_directory = std::move(*directory);
             }
             auto session = host::create_session(*options, error);
