@@ -3,6 +3,8 @@
 #import <CoreGraphics/CoreGraphics.h>
 
 #include "frame_image.h"
+#include "input_view.h"
+#include "metal_presenter.h"
 
 #include <algorithm>
 #include <exception>
@@ -26,19 +28,32 @@ void write_percentiles(const std::optional<host::Percentiles>& percentiles) {
               << ",\"p99Ns\":" << percentiles->p99.count() << '}';
 }
 
-void write_metrics(const host::FrameMetrics& metrics) {
+void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = {},
+                   const std::optional<host::MetalMetrics>& metal = std::nullopt) {
     const auto peakRss = host::process_peak_rss_bytes();
-    std::cout << "MAC_HOST_METRICS {\"presentedFrames\":" << metrics.presented_frames
+    std::cout << "MAC_HOST_METRICS {\"presenter\":";
+    if (metal) std::cout << "\"metal-shared\"";
+    else if (viewport.width) std::cout << "\"core-graphics\"";
+    else std::cout << "null";
+    std::cout << ",\"viewportWidth\":" << viewport.width
+              << ",\"viewportHeight\":" << viewport.height
+              << ",\"presentedFrames\":" << (metal ? metal->displayed_frames : metrics.presented_frames)
+              << ",\"submittedFrames\":" << metrics.presented_frames
               << ",\"fullOriginalFrames\":" << metrics.full_original_frames
               << ",\"activeObjects\":";
     if (metrics.active_objects) std::cout << *metrics.active_objects;
     else std::cout << "null";
-    std::cout << ",\"firstAppKitDrawNs\":";
+    std::cout << ",\"firstHostFrameNs\":";
     if (metrics.first_present) std::cout << metrics.first_present->count();
+    else std::cout << "null";
+    std::cout << ",\"firstAppKitDrawNs\":";
+    if (!metal && metrics.first_present) std::cout << metrics.first_present->count();
     else std::cout << "null";
     std::cout << ",\"frameWork\":";
     write_percentiles(metrics.frame_work);
     std::cout << ",\"presentationInterval\":";
+    write_percentiles(metal ? metal->display_interval : metrics.presentation_interval);
+    std::cout << ",\"submissionInterval\":";
     write_percentiles(metrics.presentation_interval);
     std::cout << ",\"peakRssBytes\":";
     if (peakRss) std::cout << *peakRss;
@@ -68,25 +83,35 @@ void install_quit_menu(NSApplication* application) {
 
 }  // namespace
 
-@interface CoastalFrameView : NSView
-- (instancetype)initWithFrame:(NSRect)rect session:(host::Session*)session;
+@interface CoastalFrameView : CoastalInputView
+- (std::optional<host::Frame>)advanceFrame;
 - (BOOL)presentFrame:(const host::Frame&)frame;
+- (std::optional<host::MetalMetrics>)finishPresentation;
 @end
 
 @implementation CoastalFrameView {
     host::Session* _session;
     host::Viewport _viewport;
+    CoastalMetalPresenter* _metal;
     CGColorSpaceRef _colorSpace;
     CGImageRef _image;
     BOOL _drewImage;
 }
 
 - (instancetype)initWithFrame:(NSRect)rect session:(host::Session*)session {
-    if ((self = [super initWithFrame:rect])) {
+    if ((self = [super initWithFrame:rect session:session])) {
         _session = session;
         _viewport = session->viewport();
-        _colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        if (!_colorSpace) return nil;
+        if (session->supports_shared_frames()) {
+            _metal = [[CoastalMetalPresenter alloc] initWithViewport:_viewport];
+        }
+        if (_metal) {
+            self.layer = _metal.layer;
+            self.wantsLayer = YES;
+        } else {
+            _colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            if (!_colorSpace) return nil;
+        }
     }
     return self;
 }
@@ -98,7 +123,20 @@ void install_quit_menu(NSApplication* application) {
 
 - (BOOL)isOpaque { return YES; }
 
+- (void)viewDidChangeBackingProperties {
+    [super viewDidChangeBackingProperties];
+    if (_metal) _metal.layer.contentsScale = self.window.backingScaleFactor;
+}
+
+- (std::optional<host::Frame>)advanceFrame {
+    if (!_metal) return _session->advance_frame();
+    const auto pixels = [_metal writablePixels];
+    if (pixels.empty()) return std::nullopt;
+    return _session->advance_frame_into(pixels);
+}
+
 - (BOOL)presentFrame:(const host::Frame&)frame {
+    if (_metal) return [_metal presentFrame:frame];
     auto* image = host::create_rgba_frame_image(_viewport, frame, _colorSpace);
     if (!image) return NO;
     if (_image) CGImageRelease(_image);
@@ -109,7 +147,14 @@ void install_quit_menu(NSApplication* application) {
     return _drewImage;
 }
 
+- (std::optional<host::MetalMetrics>)finishPresentation {
+    if (!_metal) return std::nullopt;
+    [_metal finish];
+    return [_metal metrics];
+}
+
 - (void)drawRect:(NSRect)dirtyRect {
+    if (_metal) return;
     if (!_image) {
         [NSColor.blackColor setFill];
         NSRectFill(dirtyRect);
@@ -122,21 +167,6 @@ void install_quit_menu(NSApplication* application) {
     _drewImage = YES;
 }
 
-- (void)sendPointer:(NSEvent*)event phase:(host::PointerEvent::Phase)phase {
-    const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
-    const NSRect bounds = self.bounds;
-    if (NSIsEmptyRect(bounds)) return;
-    const double x = (point.x - NSMinX(bounds)) * _viewport.width / NSWidth(bounds);
-    const double y = (NSMaxY(bounds) - point.y) * _viewport.height / NSHeight(bounds);
-    _session->pointer_event({phase, static_cast<std::uint32_t>(event.buttonNumber), x, y});
-}
-
-- (void)mouseDown:(NSEvent*)event { [self sendPointer:event phase:host::PointerEvent::Phase::Down]; }
-- (void)mouseDragged:(NSEvent*)event { [self sendPointer:event phase:host::PointerEvent::Phase::Drag]; }
-- (void)mouseUp:(NSEvent*)event { [self sendPointer:event phase:host::PointerEvent::Phase::Up]; }
-- (void)rightMouseDown:(NSEvent*)event { [self sendPointer:event phase:host::PointerEvent::Phase::Down]; }
-- (void)rightMouseDragged:(NSEvent*)event { [self sendPointer:event phase:host::PointerEvent::Phase::Drag]; }
-- (void)rightMouseUp:(NSEvent*)event { [self sendPointer:event phase:host::PointerEvent::Phase::Up]; }
 @end
 
 @interface CoastalAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
@@ -145,6 +175,7 @@ void install_quit_menu(NSApplication* application) {
 - (void)detach;
 - (int)status;
 - (host::FrameMetrics)metrics;
+- (std::optional<host::MetalMetrics>)finishPresentation;
 @end
 
 @implementation CoastalAppDelegate {
@@ -173,6 +204,7 @@ void install_quit_menu(NSApplication* application) {
     _window.releasedWhenClosed = NO;
     _window.title = NSProcessInfo.processInfo.processName;
     _window.contentView = _surface;
+    _window.acceptsMouseMovedEvents = YES;
     _window.delegate = self;
     [_window center];
     return self;
@@ -198,10 +230,10 @@ void install_quit_menu(NSApplication* application) {
         try {
             const auto result = _loop->tick([self]() -> std::optional<host::FrameCommit> {
                 if (!_window.visible || _window.miniaturized) return std::nullopt;
-                const auto frame = _session->advance_frame();
+                const auto frame = [_surface advanceFrame];
                 if (!frame) return std::nullopt;
                 if (!_loop->accepts_frame(frame->commit)) return frame->commit;
-                if (![_surface presentFrame:*frame]) throw std::runtime_error("Could not draw a session frame.");
+                if (![_surface presentFrame:*frame]) throw std::runtime_error("Could not present a session frame.");
                 return frame->commit;
             });
             if (_stopped) return;
@@ -238,6 +270,12 @@ void install_quit_menu(NSApplication* application) {
     return NSTerminateCancel;
 }
 
+- (void)windowDidBecomeKey:(NSNotification*)notification {
+    [_window makeFirstResponder:_surface];
+}
+
+- (void)windowDidResignKey:(NSNotification*)notification { _session->input_focus_lost(); }
+
 - (void)windowWillClose:(NSNotification*)notification { [self stopWithStatus:0]; }
 
 - (void)detach {
@@ -254,6 +292,7 @@ void install_quit_menu(NSApplication* application) {
 
 - (int)status { return _status; }
 - (host::FrameMetrics)metrics { return _loop->metrics(); }
+- (std::optional<host::MetalMetrics>)finishPresentation { return [_surface finishPresentation]; }
 @end
 
 int main(int argc, char** argv) {
@@ -269,22 +308,9 @@ int main(int argc, char** argv) {
                 return 0;
             }
 
-            NSApplication* application = nil;
-            if (!options->data_directory.empty()) {
-                auto directory = host::validate_data_directory(options->data_directory, error);
-                if (!directory) return startup_error(error);
-                options->data_directory = std::move(*directory);
-            } else if (auto savedDirectory = host::load_saved_data_directory()) {
-                options->data_directory = std::move(*savedDirectory);
-            } else {
-                application = [NSApplication sharedApplication];
-                [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-                [application finishLaunching];
-                [application activateIgnoringOtherApps:YES];
-                auto directory = host::choose_data_directory(error);
-                if (!directory) return error.empty() ? 0 : startup_error(error);
-                options->data_directory = std::move(*directory);
-            }
+            auto directory = host::resolve_data_directory(options->data_directory, error);
+            if (!directory) return error.empty() ? 0 : startup_error(error);
+            options->data_directory = std::move(*directory);
             auto session = host::create_session(*options, error);
             if (!session) return startup_error(error.empty() ? "The session runtime could not start." : error);
             const auto viewport = session->viewport();
@@ -295,6 +321,7 @@ int main(int argc, char** argv) {
                 return startup_error("The session reported an invalid viewport or frame interval.");
             }
 
+            NSApplication* application = NSApp;
             if (!application) {
                 application = [NSApplication sharedApplication];
                 [application setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -307,10 +334,11 @@ int main(int argc, char** argv) {
             [delegate start];
             [application run];
             application.delegate = nil;
+            const auto metal = [delegate finishPresentation];
             [delegate detach];
             const auto metrics = [delegate metrics];
             session.reset();
-            write_metrics(metrics);
+            write_metrics(metrics, viewport, metal);
             return [delegate status];
         } catch (const std::exception& error) {
             return startup_error(error.what());

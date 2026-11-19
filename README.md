@@ -6,7 +6,7 @@ EA has not endorsed and does not support this product.
 
 想了解当前卡在哪里、下一步怎样验收，或挑一个适合自己的贡献，请看[开发路线图与共创任务](ROADMAP.md)。每天收工时更新的合并记录、验证结果和接手点见[每日开发记录](PROGRESS.md)。
 
-## 四个目标
+## 历史移植目标
 
 | 目标 | 我们想做到什么 | 当前优先级 |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ EA has not endorsed and does not support this product.
 | 3. 自适应 AI | 让电脑对手依据游戏规则和战况调整策略，让进攻、防守和兵力调度更灵活。 | 后续 |
 | 4. 3D | 为游戏加入三维画面。 | 后续 |
 
-**当前专注于目标 1 和 2。** 一期的验收条件是在同一款 Mac App 中同时完成原版规则对齐和千单位流畅对局。当前移植主线已有源码通过 macOS arm64 编译和链接，完整对局与同一 App 的千单位表现仍待验证。
+2026 年 11 月 19 日起，维护者先推进 CoastalHost 通用即时战略引擎。它使用 C++、AppKit 和 Metal，自制测试数据随模块提供。各阶段的目标和实际验收范围见[开发路线图](ROADMAP.md#coastalhost-通用即时战略引擎)。
 
 ## 这次开放了什么
 
@@ -42,9 +42,11 @@ make
 
 ## macOS 独立宿主测试
 
-在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主，检查启动参数、目录设置、只读 MIX 档案、帧调度及像素呈现。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略 `--data-dir` 时，宿主优先打开上次通过系统选择器选定的目录。首次启动或目录失效时会打开选择器。显式参数只对当次运行生效。正式地图需要接入可调用的对局运行时。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主，检查启动参数、目录设置、只读 MIX 档案、帧调度、像素呈现及输入回放。目录测试用两个进程验证首次选择持久化和无目录参数重启。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略 `--data-dir` 时，宿主优先打开上次通过系统选择器选定的目录。首次启动或目录失效时会打开选择器。显式参数只对当次运行生效。正式地图需要接入可调用的对局运行时。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
 
-以下命令用自制档案启动测试窗口。点击画面可移动色块，按 Cmd+Q 或关闭窗口可退出。终端会记录帧数、帧耗时分位数和峰值内存。
+以下命令用自制档案启动测试窗口。左键拖动绘制选框，Shift、Ctrl、Cmd 会改变边框颜色。右键清除选框并移动色块，空格切换色块颜色，滚轮平移，Ctrl 加滚轮缩放，指针靠近窗口边缘时平移。按 Cmd+Q 或关闭窗口退出。
+
+支持共享帧缓冲的运行时可直接向 Metal 共享内存绘制。宿主在 Metal 无法初始化时回退到 Core Graphics。退出时终端会记录显示帧数、提交帧数、帧间隔分位数和峰值内存。Metal 显示帧间隔来自系统的 drawable 呈现回调。
 
 ```sh
 make macos-host-fixture

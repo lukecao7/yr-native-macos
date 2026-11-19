@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "macos_host/launch_options.h"
 
+#import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
 
 #include <cstdlib>
@@ -41,7 +42,10 @@ struct TestPreferences {
     NSUserDefaults* const defaults = NSUserDefaults.standardUserDefaults;
     NSString* const domain;
 
-    ~TestPreferences() { [defaults removePersistentDomainForName:domain]; }
+    ~TestPreferences() {
+        [defaults removePersistentDomainForName:domain];
+        CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
+    }
 };
 
 void expect(bool passed, std::string_view description) {
@@ -94,20 +98,103 @@ void test_saved_directory(NSUserDefaults* defaults) {
            "A picker failure leaves the saved directory available");
 }
 
+void launch_fixture(NSString* mode, const fs::path& data) {
+    NSTask* task = [NSTask new];
+    task.executableURL = NSBundle.mainBundle.executableURL;
+    task.arguments = @[mode, preference_value(data.native())];
+    NSError* error = nil;
+    if (![task launchAndReturnError:&error]) {
+        throw std::runtime_error(error.localizedDescription.UTF8String);
+    }
+    [task waitUntilExit];
+    expect(task.terminationReason == NSTaskTerminationReasonExit && task.terminationStatus == 0,
+           std::string("The separate directory test process failed: ") + mode.UTF8String);
+}
+
+void test_picker_round_trip() {
+    const TemporaryDirectory temporary;
+    const auto data = temporary.path / "新资料 Workspace";
+    const auto link = temporary.path / "Picked data";
+    fs::create_directory(data);
+    fs::create_directory_symlink(data, link);
+
+    std::string error = "stale error";
+    expect(!host::resolve_data_directory({}, error, [](auto&) { return std::nullopt; }) &&
+               error.empty(),
+           "Canceling the first selection returns no path and no error");
+
+    const auto missing = temporary.path / "missing";
+    expect(!host::resolve_data_directory({}, error, [&](auto&) { return missing; }) &&
+               !error.empty() && !host::load_saved_data_directory(),
+           "An invalid first selection does not save preferences");
+
+    launch_fixture(@"--select", link);
+    launch_fixture(@"--relaunch", data);
+}
+
+void select_first_directory(const fs::path& link) {
+    std::string error;
+    int selections = 0;
+    expect(!host::load_saved_data_directory(), "The first launch has no saved preference");
+    const auto directory = host::resolve_data_directory({}, error, [&](auto&) {
+        ++selections;
+        return link;
+    });
+    expect(directory == fs::canonical(link) && error.empty() && selections == 1,
+           "The first launch invokes the picker once and resolves its path");
+    expect(host::load_saved_data_directory() == directory, "The first selection is saved");
+    // The test binary is a command-line process that exits immediately.
+    expect(CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication),
+           "The first process could not flush its preferences");
+}
+
+void restore_on_relaunch(const fs::path& expected) {
+    std::string error;
+    int selections = 0;
+    const host::DirectorySelector selector = [&](auto&) {
+        ++selections;
+        return std::nullopt;
+    };
+    const auto options = host::parse_launch_options({}, error);
+    expect(options.has_value() && options->data_directory.empty(), "No data argument on relaunch");
+    expect(host::resolve_data_directory(options->data_directory, error, selector) ==
+               fs::canonical(expected) && error.empty() && selections == 0,
+           "An argument-free relaunch reads the preference and skips the picker");
+
+    const auto override_directory = fs::canonical(expected.parent_path());
+    expect(host::resolve_data_directory(override_directory, error, selector) ==
+               override_directory && error.empty() && selections == 0,
+           "A one-run override takes priority over the preference");
+    expect(host::load_saved_data_directory() == fs::canonical(expected),
+           "An override leaves the picker preference intact");
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     @autoreleasepool {
         try {
             NSString* domain = NSBundle.mainBundle.bundleIdentifier;
             if (![domain hasPrefix:@"org.coastalcommand.host-data-directory-test."]) {
                 throw std::runtime_error("Run this test with an isolated test bundle identifier.");
             }
+            if (argc == 3) {
+                const std::string_view mode = argv[1];
+                if (mode == "--select") select_first_directory(argv[2]);
+                else if (mode == "--relaunch") restore_on_relaunch(argv[2]);
+                else throw std::runtime_error("Unknown directory fixture mode.");
+                return 0;
+            }
+            if (argc != 1) throw std::runtime_error("Unexpected directory fixture arguments.");
             if ([NSUserDefaults.standardUserDefaults persistentDomainForName:domain].count) {
                 throw std::runtime_error("The test preferences domain is already in use.");
             }
             const TestPreferences preferences{.domain = domain};
             test_saved_directory(preferences.defaults);
+            [preferences.defaults removePersistentDomainForName:domain];
+            expect(CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication),
+                   "The existing settings test could not clear preferences");
+            test_picker_round_trip();
             std::cout << "{\"all_passed\":true,\"check_count\":" << check_count << "}\n";
             return 0;
         } catch (const std::exception& failure) {
