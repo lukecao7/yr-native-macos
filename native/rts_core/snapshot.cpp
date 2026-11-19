@@ -22,12 +22,16 @@ namespace coastal::rts {
 namespace {
 
 constexpr std::array<std::uint8_t, 4> signature{'C', 'R', 'T', 'S'};
-constexpr std::uint16_t format_version = 1;
+constexpr std::uint16_t legacy_version = 1;
+constexpr std::uint16_t ai_version = 2;
 constexpr std::size_t snapshot_limit = 16 * 1024 * 1024;
 constexpr std::size_t tile_bytes = 4;
 constexpr std::size_t production_bytes = 7;
 constexpr std::size_t entity_bytes = 52;
 constexpr std::size_t projectile_bytes = 28;
+constexpr std::size_t focus_bytes = 2 * sizeof(EntityId);
+constexpr std::size_t seen_tile_bytes = 4;
+constexpr std::size_t contact_bytes = 23;
 
 std::uint64_t checksum(std::span<const std::uint8_t> bytes) noexcept {
     std::uint64_t hash = 14695981039346656037ULL;
@@ -163,6 +167,77 @@ void projectile_fields(Archive& archive, auto& projectile) {
     archive(projectile.remaining, projectile.travel_ticks, projectile.damage);
 }
 
+template <class Archive>
+void ai_fields(Archive& archive, auto& memory) {
+    cell_fields(archive, memory.scout_target);
+    cell_fields(archive, memory.expansion);
+    archive(memory.survey_index, memory.preference);
+}
+
+template <class Archive>
+void seen_tile_fields(Archive& archive, auto& tile) {
+    archive(tile.known, tile.terrain, tile.resource);
+}
+
+template <class Archive>
+void contact_fields(Archive& archive, auto& contact) {
+    archive(contact.id, contact.kind);
+    cell_fields(archive, contact.position);
+    archive(contact.hp, contact.seen_at);
+}
+
+void write_extensions(Writer& writer, const World& world, std::uint32_t focus_count) {
+    writer(focus_count);
+    for (const auto& entity : world.entities) {
+        if (entity.focus != no_entity) writer(entity.id, entity.focus);
+    }
+    for (const auto& side : world.sides) {
+        writer(side.ai.has_value());
+        if (!side.ai) continue;
+        const auto& memory = *side.ai;
+        ai_fields(writer, memory);
+        writer.count(memory.chart);
+        for (const auto& tile : memory.chart) seen_tile_fields(writer, tile);
+        writer.count(memory.enemies);
+        for (const auto& contact : memory.enemies) contact_fields(writer, contact);
+    }
+}
+
+void read_extensions(Reader& reader, World& world) {
+    const auto focus_count = reader.count(world.entities.size(), focus_bytes);
+    auto actor = world.entities.begin();
+    for (std::size_t i = 0; i < focus_count; ++i) {
+        EntityId owner, focus;
+        reader(owner, focus);
+        // Advance through the sorted entity list. Each owner can occur once.
+        while (actor != world.entities.end() && actor->id < owner) ++actor;
+        if (actor == world.entities.end() || actor->id != owner || focus == no_entity) {
+            throw std::invalid_argument("Invalid focus owner or target in save.");
+        }
+        actor->focus = focus;
+        ++actor;
+    }
+
+    for (auto& side : world.sides) {
+        bool present;
+        reader(present);
+        if (!present) continue;
+        auto& memory = side.ai.emplace();
+        ai_fields(reader, memory);
+        const auto chart_size = reader.count(world.map.tiles.size(), seen_tile_bytes);
+        if (chart_size != 0 && chart_size != world.map.tiles.size()) {
+            throw std::invalid_argument("AI chart does not match the map size.");
+        }
+        memory.chart.resize(chart_size);
+        for (auto& tile : memory.chart) seen_tile_fields(reader, tile);
+        memory.enemies.resize(reader.count(World::entity_limit, contact_bytes));
+        for (auto& contact : memory.enemies) contact_fields(reader, contact);
+    }
+    if (focus_count == 0 && !world.sides[0].ai && !world.sides[1].ai) {
+        throw std::invalid_argument("Save has an empty AI extension.");
+    }
+}
+
 void write_ids(Writer& writer, const std::vector<EntityId>& ids) {
     writer.count(ids);
     for (const EntityId id : ids) writer(id);
@@ -191,6 +266,37 @@ bool valid_id_list(const World& world, const std::vector<EntityId>& ids, Side si
         previous = id;
     }
     return true;
+}
+
+void check_ai_memory(const World& world, Side side, const AiMemory& memory) {
+    if ((!memory.chart.empty() && memory.chart.size() != world.map.tiles.size()) ||
+        memory.enemies.size() > World::entity_limit ||
+        memory.preference > UnitKind::Count ||
+        !optional_cell(world.map, memory.scout_target) ||
+        !optional_cell(world.map, memory.expansion)) {
+        throw std::invalid_argument("Invalid AI memory in save.");
+    }
+    for (const auto& tile : memory.chart) {
+        if (tile.terrain > Terrain::Deposit || (tile.terrain != Terrain::Deposit && tile.resource) ||
+            (!tile.known && (tile.terrain != Terrain::Ground || tile.resource))) {
+            throw std::invalid_argument("Invalid remembered terrain or resource in save.");
+        }
+    }
+
+    EntityId previous = no_entity;
+    for (const auto& contact : memory.enemies) {
+        if (contact.id <= previous || contact.id >= world.next_id ||
+            contact.kind >= UnitKind::Count || contact.hp == 0 ||
+            contact.hp > world.rules.spec(contact.kind).hp ||
+            !world.map.contains(contact.position) || contact.seen_at > world.step) {
+            throw std::invalid_argument("Invalid remembered contact in save.");
+        }
+        const auto* current = world.find(contact.id);
+        if (current && current->side == side) {
+            throw std::invalid_argument("Remembered enemy ID belongs to the same faction.");
+        }
+        previous = contact.id;
+    }
 }
 
 void check_world(const World& world) {
@@ -226,12 +332,20 @@ void check_world(const World& world) {
             !map.walkable(entity.position) || !optional_cell(map, entity.destination) ||
             !optional_cell(map, entity.deposit) || entity.order > OrderKind::Gather ||
             entity.gather > GatherPhase::Return || entity.depot >= world.next_id ||
+            entity.focus >= world.next_id ||
             entity.cargo > world.rules.cargo_capacity || entity.work >= world.rules.harvest_ticks ||
             entity.facing.x < -1 || entity.facing.x > 1 ||
             entity.facing.y < -1 || entity.facing.y > 1) {
             throw std::invalid_argument("Invalid entity state in save.");
         }
         previous = entity.id;
+    }
+
+    for (const auto& entity : world.entities) {
+        const auto* target = entity.focus == no_entity ? nullptr : world.find(entity.focus);
+        if (target && target->side == entity.side) {
+            throw std::invalid_argument("A focus target belongs to the same faction.");
+        }
     }
 
     for (const Projectile& projectile : world.projectiles) {
@@ -251,6 +365,7 @@ void check_world(const World& world) {
             !valid_id_list(world, side.selected, value)) {
             throw std::invalid_argument("Invalid faction state in save.");
         }
+        if (side.ai) check_ai_memory(world, value, *side.ai);
         for (const auto& group : side.groups) {
             if (!valid_id_list(world, group, value)) {
                 throw std::invalid_argument("Invalid control group in save.");
@@ -306,7 +421,10 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
 
     Writer writer;
     writer.bytes.insert(writer.bytes.end(), signature.begin(), signature.end());
-    writer(format_version);
+    const auto focus_count = static_cast<std::uint32_t>(std::ranges::count_if(
+        world.entities, [](const Entity& entity) { return entity.focus != no_entity; }));
+    const bool has_extension = focus_count != 0 || world.sides[0].ai || world.sides[1].ai;
+    writer(has_extension ? ai_version : legacy_version);
     world_fields(writer, world);
     writer(static_cast<std::uint16_t>(world.map.width), static_cast<std::uint16_t>(world.map.height));
     for (const Cell start : world.map.starts) cell_fields(writer, start);
@@ -323,13 +441,14 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
     for (const Entity& entity : world.entities) entity_fields(writer, entity);
     writer.count(world.projectiles);
     for (const Projectile& projectile : world.projectiles) projectile_fields(writer, projectile);
+    if (has_extension) write_extensions(writer, world, focus_count);
     writer(checksum(writer.bytes));
     return std::move(writer.bytes);
 }
 
 std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::string& error) {
     error.clear();
-    if (bytes.size() < signature.size() + sizeof(format_version) + sizeof(std::uint64_t) ||
+    if (bytes.size() < signature.size() + sizeof(legacy_version) + sizeof(std::uint64_t) ||
         bytes.size() > snapshot_limit || !std::ranges::equal(bytes.first(signature.size()), signature)) {
         error = "Unrecognized save size or signature.";
         return std::nullopt;
@@ -347,7 +466,9 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         Reader reader(body.subspan(signature.size()));
         std::uint16_t version;
         reader(version);
-        if (version != format_version) throw std::invalid_argument("Unsupported save version.");
+        if (version != legacy_version && version != ai_version) {
+            throw std::invalid_argument("Unsupported save version.");
+        }
 
         World world;
         world_fields(reader, world);
@@ -375,6 +496,7 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         for (Entity& entity : world.entities) entity_fields(reader, entity);
         world.projectiles.resize(reader.count(World::projectile_limit, projectile_bytes));
         for (Projectile& projectile : world.projectiles) projectile_fields(reader, projectile);
+        if (version == ai_version) read_extensions(reader, world);
         if (!reader.empty()) throw std::invalid_argument("Unexpected bytes at the end of the save.");
         check_world(world);
         return world;

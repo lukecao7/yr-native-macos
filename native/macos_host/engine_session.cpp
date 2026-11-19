@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "session.h"
 
+#include "rts_ai/strategy.h"
+
 #include "rts_core/combat.h"
 #include "rts_core/economy.h"
 #include "rts_core/iso.h"
@@ -49,53 +51,13 @@ bool is_drag(const SelectionBox& box) noexcept {
     return std::abs(box.start.x - box.end.x) >= 4 || std::abs(box.start.y - box.end.y) >= 4;
 }
 
-void build_opening(World& world, Side side) {
-    world.apply(order(CommandKind::Deploy, side));
-    const auto start = world.map.starts[side_index(side)];
-    for (const auto kind : {UnitKind::Generator, UnitKind::Depot, UnitKind::Workshop}) {
-        auto command = order(CommandKind::Build, side);
-        command.unit = kind;
-        // Start near the base and leave its four adjacent movement cells free.
-        bool placed = false;
-        for (int radius = 2; radius <= 8 && !placed; ++radius) {
-            for (int y = -radius; y <= radius && !placed; ++y) {
-                for (int x = -radius; x <= radius; ++x) {
-                    if (std::abs(x) + std::abs(y) != radius) continue;
-                    command.target = {start.x + x, start.y + y};
-                    if (world.apply(command)) {
-                        placed = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-void scripted_rival(World& world) {
-    if (world.result != MatchResult::Running) return;
-    if (world.step == 0) build_opening(world, rival);
-    if (world.step % 150 == 0 && world.side(rival).queue.size() < 2) {
-        auto train = order(CommandKind::Queue, rival);
-        train.unit = UnitKind::Skirmisher;
-        world.apply(train);
-    }
-    if (world.step >= 600 && world.step % 180 == 0) {
-        auto attack = order(CommandKind::AttackMove, rival);
-        attack.target = world.map.starts[side_index(player)];
-        for (const auto& unit : world.entities) {
-            if (unit.side == rival && unit.kind == UnitKind::Skirmisher) attack.units.push_back(unit.id);
-        }
-        if (!attack.units.empty()) world.apply(attack);
-    }
-}
-
 class EngineSession final : public Session {
 public:
     EngineSession(World world, const LaunchOptions& options)
         : world_(std::move(world)), navigator_(options.threads, options.strict_audit),
           save_path_(options.data_directory / "CoastalHost.snapshot"),
-          threads_(options.threads), audit_(options.strict_audit), stress_(options.stress) {
+          threads_(options.threads), audit_(options.strict_audit), stress_(options.stress),
+          adaptive_(options.adaptive_ai) {
         if (stress_) {
             camera_.zoom = .55;
             camera_.center_on({world_.map.width / 2, world_.map.height / 2}, world_.map);
@@ -129,8 +91,13 @@ public:
 
     std::optional<Frame> advance_frame_into(std::span<std::uint8_t> rgba) override {
         if (rgba.size() != frame_size) return std::nullopt;
-        if (stress_) drive_stress(world_);
-        else scripted_rival(world_);
+        if (stress_) {
+            drive_stress(world_);
+        } else if (adaptive_ || world_.side(rival).ai) {
+            ai::drive_adaptive(world_, rival, audit_ ? &std::cout : nullptr);
+        } else {
+            ai::drive_scripted(world_, rival);
+        }
         const auto started = FrameClock::now();
         world_.tick(navigator_);
         if (stress_ && audit_) sample_workload(started);
@@ -386,6 +353,7 @@ private:
     unsigned threads_;
     bool audit_;
     bool stress_;
+    bool adaptive_;
     std::size_t minimum_units_ = World::entity_limit;
     unsigned minimum_active_ = World::entity_limit;
     std::uint64_t simulation_ns_ = 0;
