@@ -46,6 +46,11 @@ public:
     FrameLoop(FrameClock::duration interval, FrameClock::time_point launched_at,
               Now now = FrameClock::now, std::size_t sample_limit = 4096);
     FrameTick tick(const Step& step);
+    // Check the next index before showing a frame. Return a rejected commit
+    // from Step so tick reports InvalidFrame without counting a presentation.
+    bool accepts_frame(const FrameCommit& commit) const noexcept {
+        return commit.index == metrics_.presented_frames;
+    }
     FrameClock::time_point next_due() const noexcept { return next_due_; }
     void stop() noexcept;
     FrameMetrics metrics() const;

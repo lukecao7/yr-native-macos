@@ -42,7 +42,7 @@ make
 
 ## macOS 独立宿主测试
 
-在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主并运行三组独立测试。测试检查启动参数、只读 MIX 档案和帧调度。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略数据目录时，宿主打开系统目录选择器。正式地图需要接入可调用的对局运行时。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主，检查启动参数、目录设置、只读 MIX 档案、帧调度及像素呈现。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略 `--data-dir` 时，宿主优先打开上次通过系统选择器选定的目录。首次启动或目录失效时会打开选择器。显式参数只对当次运行生效。正式地图需要接入可调用的对局运行时。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
 
 以下命令用自制档案启动测试窗口。点击画面可移动色块，按 Cmd+Q 或关闭窗口可退出。终端会记录帧数、帧耗时分位数和峰值内存。
 

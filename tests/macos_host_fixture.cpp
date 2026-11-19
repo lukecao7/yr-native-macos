@@ -17,20 +17,25 @@ constexpr int marker_size = 64;
 
 class FixtureSession final : public Session {
 public:
-    explicit FixtureSession(Pixel marker)
-        : marker_(marker), pixels_(std::size_t(viewport().width) * viewport().height, background) {}
+    explicit FixtureSession(Pixel marker) : marker_(marker) {}
 
     Viewport viewport() const noexcept override { return macos_host::viewport; }
     FrameClock::duration frame_interval() const noexcept override { return std::chrono::nanoseconds(16'666'667); }
 
     std::optional<Frame> advance_frame() override {
-        paint(previous_x_, previous_y_, background);
+        auto& surface = surfaces_[index_ % surfaces_.size()];
+        if (!surface || !surface.unique()) {
+            surface = std::make_shared<Surface>(std::size_t(viewport().width) * viewport().height);
+        }
+        paint(*surface, background);
         const auto span = viewport().width - marker_size;
-        previous_x_ = pinned_ ? pointer_x_ : int((index_ * 4) % (span + 1));
-        previous_y_ = pinned_ ? pointer_y_ : int((viewport().height - marker_size) / 2);
-        paint(previous_x_, previous_y_, marker_);
+        surface->x = pinned_ ? pointer_x_ : int((index_ * 4) % (span + 1));
+        surface->y = pinned_ ? pointer_y_ : int((viewport().height - marker_size) / 2);
+        paint(*surface, marker_);
         return Frame{{index_++, 1, false},
-                     {reinterpret_cast<const std::uint8_t*>(pixels_.data()), pixels_.size() * sizeof(Pixel)}};
+                     {reinterpret_cast<const std::uint8_t*>(surface->pixels.data()),
+                      surface->pixels.size() * sizeof(Pixel)},
+                     surface};
     }
 
     void pointer_event(PointerEvent event) noexcept override {
@@ -44,18 +49,24 @@ public:
     }
 
 private:
-    void paint(int x, int y, Pixel pixel) {
+    struct Surface {
+        explicit Surface(std::size_t size) : pixels(size, background) {}
+        std::vector<Pixel> pixels;
+        int x = 0, y = 0;
+    };
+
+    void paint(Surface& surface, Pixel pixel) {
         for (int row = 0; row < marker_size; ++row) {
-            std::fill_n(pixels_.data() + (y + row) * viewport().width + x, marker_size, pixel);
+            auto* begin = surface.pixels.data() + (surface.y + row) * viewport().width + surface.x;
+            std::fill_n(begin, marker_size, pixel);
         }
     }
 
     Pixel marker_;
-    std::vector<Pixel> pixels_;
+    std::array<std::shared_ptr<Surface>, 2> surfaces_{};
     std::uint64_t index_ = 0;
     bool pinned_ = false;
     int pointer_x_ = 0, pointer_y_ = 0;
-    int previous_x_ = 0, previous_y_ = 0;
 };
 
 }  // namespace

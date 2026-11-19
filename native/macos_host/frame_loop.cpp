@@ -85,7 +85,7 @@ FrameTick FrameLoop::tick(const Step& step) {
         return FrameTick::Stopped;
     }
 
-    if (finished < started || (commit && commit->index != metrics_.presented_frames)) {
+    if (finished < started || (commit && !accepts_frame(*commit))) {
         metrics_.full_original_frames = 0;
         stop();
         return FrameTick::InvalidFrame;

@@ -19,9 +19,17 @@ struct Fixture {
     FrameClock::time_point launched{};
     FrameClock::time_point time = launched;
     FrameLoop loop;
+    std::uint64_t draws = 0;
 
     explicit Fixture(std::size_t sample_limit = 4096)
         : loop(10ms, launched, [this] { return time; }, sample_limit) {}
+
+    FrameCommit draw_if_accepted(FrameCommit commit) {
+        if (loop.accepts_frame(commit)) {
+            ++draws;
+        }
+        return commit;
+    }
 };
 
 void continuously_submit_diagnostic_frames() {
@@ -36,13 +44,13 @@ void continuously_submit_diagnostic_frames() {
         fixture.time = fixture.launched + 2ms + 10ms * index;
         const auto status = fixture.loop.tick([&] {
             fixture.time += 1ms * (1 + index % 5);
-            return FrameCommit{index, 40 + index};
+            return fixture.draw_if_accepted({index, 40 + index});
         });
         expect(status == FrameTick::Presented, "All 300 numbered host frames commit");
     }
 
     const auto metrics = fixture.loop.metrics();
-    expect(metrics.presented_frames == 300 && metrics.full_original_frames == 0 &&
+    expect(fixture.draws == 300 && metrics.presented_frames == 300 && metrics.full_original_frames == 0 &&
                metrics.active_objects == 339 && metrics.first_present == 3ms,
            "Fixture commits stay diagnostic and preserve object and first-frame measurements");
     expect(metrics.frame_work && metrics.frame_work->sample_count == 300 &&
@@ -108,28 +116,31 @@ void skip_waiting_and_late_slots() {
 
 void require_valid_frame_sequence() {
     Fixture wrong_first;
-    expect(wrong_first.loop.tick([] { return FrameCommit{1, 2}; }) == FrameTick::InvalidFrame &&
+    expect(wrong_first.loop.tick([&] { return wrong_first.draw_if_accepted({1, 2}); }) == FrameTick::InvalidFrame &&
+               wrong_first.draws == 0 &&
                wrong_first.loop.metrics().presented_frames == 0 &&
                !wrong_first.loop.metrics().first_present,
            "A sequence must start at zero");
 
     Fixture jumped;
-    expect(jumped.loop.tick([] { return FrameCommit{0, 2}; }) == FrameTick::Presented,
+    expect(jumped.loop.tick([&] { return jumped.draw_if_accepted({0, 2}); }) == FrameTick::Presented,
            "Accept the initial state");
     jumped.time += 10ms;
-    expect(jumped.loop.tick([] { return FrameCommit{2, 3}; }) == FrameTick::InvalidFrame &&
+    expect(jumped.loop.tick([&] { return jumped.draw_if_accepted({2, 3}); }) == FrameTick::InvalidFrame &&
+               jumped.draws == 1 &&
                jumped.loop.metrics().presented_frames == 1 &&
                jumped.loop.metrics().active_objects == 2 &&
                !jumped.loop.metrics().presentation_interval,
-           "Reject a skipped index without recording its timing or object count");
+           "Reject a skipped index before drawing or recording its timing or object count");
     expect(jumped.loop.tick([] { return FrameCommit{1, 3}; }) == FrameTick::Stopped,
            "A sequence error stops further dispatch");
 
     Fixture duplicate;
-    expect(duplicate.loop.tick([] { return FrameCommit{0, 5}; }) == FrameTick::Presented,
+    expect(duplicate.loop.tick([&] { return duplicate.draw_if_accepted({0, 5}); }) == FrameTick::Presented,
            "Accept frame zero before checking duplication");
     duplicate.time += 10ms;
-    expect(duplicate.loop.tick([] { return FrameCommit{0, 6}; }) == FrameTick::InvalidFrame &&
+    expect(duplicate.loop.tick([&] { return duplicate.draw_if_accepted({0, 6}); }) == FrameTick::InvalidFrame &&
+               duplicate.draws == 1 &&
                duplicate.loop.metrics().presented_frames == 1,
            "A duplicate index cannot become a second presentation");
 
