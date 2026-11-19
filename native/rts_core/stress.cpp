@@ -11,19 +11,20 @@ namespace {
 
 constexpr int extent = 512;
 constexpr int center = extent / 2;
-constexpr int firing_rows = 32;
+constexpr int firing_rows = 25;
 constexpr int firing_pairs = 12;
-constexpr int movement_rows = 17;
+constexpr int movement_rows = 20;
+constexpr int movers_per_row = 15;
 constexpr int west_goal = center - 22;
 constexpr int east_goal = center + 22;
 constexpr std::uint64_t move_interval = 6;
-constexpr std::uint8_t fire_interval = 4;
+constexpr std::uint8_t fire_interval = 1;
 constexpr std::uint16_t endurance = std::numeric_limits<std::uint16_t>::max();
 
 constexpr std::array sides{Side::Blue, Side::Copper};
 
 constexpr int movement_row_start(Side side) {
-    return side == Side::Blue ? center - 32 : center + 17;
+    return side == Side::Blue ? center - 32 : center + 13;
 }
 
 Rules stress_rules() {
@@ -37,10 +38,10 @@ Rules stress_rules() {
     rules.spec(UnitKind::Workshop) = {.hp = 170, .cost = 200, .vision = 6, .power = -18};
     rules.spec(UnitKind::Collector) = {.hp = 90, .cost = 70, .train_ticks = 40,
                                      .move_period = 3, .vision = 5};
-    // Four-step volleys and one damage per hit leave all actors live for the
-    // full endurance run. Both sides use the same rules.
+    // One shot per firing unit per step. The adjacent opposing pairs and
+    // one damage per impact keep the line alive through the endurance run.
     rules.spec(UnitKind::Skirmisher) = {.hp = endurance, .cost = 80, .train_ticks = 30,
-                                      .move_period = 1, .vision = 22, .range = 6,
+                                      .move_period = 1, .vision = 22, .range = 9,
                                       .damage = 1, .armor = 2, .shot_period = fire_interval};
     rules.spec(UnitKind::Sentinel) = {.hp = endurance, .cost = 140, .train_ticks = 42,
                                     .move_period = 1, .vision = 18, .range = 4,
@@ -96,24 +97,22 @@ World make_stress_match() {
     for (int row = 0; row < firing_rows; ++row) {
         for (int pair = 0; pair < firing_pairs; ++pair) {
             const int x = center - 22 + 4 * pair;
-            const int y = center - 15 + row;
+            const int y = center - 12 + row;
             for (const auto side : sides) {
                 const int team = static_cast<int>(side_index(side));
-                auto& unit = place_unit(world, UnitKind::Skirmisher, side, {x + 2 * team, y});
+                auto& unit = place_unit(world, UnitKind::Skirmisher, side, {x + team, y});
                 unit.order = OrderKind::Hold;
-                unit.shot_wait = static_cast<std::uint8_t>((row + pair + team) % fire_interval);
             }
         }
     }
 
-    // Thirteen movers per full row, split by a free tile. Turning the whole
-    // row around before the leading unit reaches the goal preserves spacing.
+    // Each flank has 300 movers. Turning the whole row around before the
+    // leading unit reaches the goal keeps one free tile between actors.
     for (const auto side : sides) {
         for (int row = 0; row < movement_rows; ++row) {
-            const int count = row + 1 == movement_rows ? 8 : 13;
             const int y = movement_row_start(side) + row;
-            for (int column = 0; column < count; ++column) {
-                const int x = center - (count - 1) + 2 * column;
+            for (int column = 0; column < movers_per_row; ++column) {
+                const int x = center - (movers_per_row - 1) + 2 * column;
                 place_unit(world, UnitKind::Sentinel, side, {x, y});
             }
         }
