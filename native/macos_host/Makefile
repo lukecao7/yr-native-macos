@@ -6,7 +6,7 @@ mac_host_obj := build/macos_host
 mac_host_headers := $(wildcard $(mac_host_dir)/*.h)
 mac_host_flags := -O1 -fno-fast-math -frounding-math -ffp-contract=off -Wall -Wextra -Wpedantic
 mac_host_frameworks := -framework AppKit -framework CoreGraphics -framework CoreFoundation -framework Foundation -framework Metal -framework QuartzCore
-mac_host_common := $(addprefix $(mac_host_obj)/,application.o data_directory.o frame_image.o frame_loop.o input_view.o launch_options.o metal_presenter.o mix_archive.o)
+mac_host_common := $(addprefix $(mac_host_obj)/,application.o data_directory.o frame_image.o frame_loop.o input_view.o launch_options.o metal_presenter.o metal_scene.o mix_archive.o)
 mac_host_app := build/CoastalHost.app
 mac_host_fixture_app := build/CoastalHostFixture.app
 mac_host_executable := Contents/MacOS/CoastalMacHost
@@ -28,7 +28,7 @@ $(mac_host_obj)/%.o: $(mac_host_dir)/%.cpp $(mac_host_headers) | $(mac_host_obj)
 $(mac_host_obj)/%.o: $(mac_host_dir)/%.mm $(mac_host_headers) | $(mac_host_obj)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(mac_host_flags) -fobjc-arc -c $< -o $@
 
-$(mac_host_obj)/engine_session.o: $(rts_headers)
+$(mac_host_obj)/engine_session.o $(mac_host_obj)/metal_scene.o $(mac_host_obj)/metal_presenter.o: $(rts_headers)
 
 $(mac_host_obj)/fixture.o: tests/macos_host_fixture.cpp $(mac_host_headers) | $(mac_host_obj)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(mac_host_flags) -c $< -o $@
