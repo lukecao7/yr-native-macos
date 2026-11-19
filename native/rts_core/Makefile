@@ -4,9 +4,11 @@ rts_sources := world combat economy iso snapshot match worker_pool spatial_index
 rts_headers := $(wildcard $(rts_dir)/*.h) $(wildcard native/navigation/*.h)
 rts_ai_sources := strategy scout industry tactics
 rts_ai_obj := $(rts_obj)/ai
-rts_headers += $(wildcard native/rts_ai/*.h)
+rts_3d_sources := camera scene terrain
+rts_3d_obj := $(rts_obj)/view3d
+rts_headers += $(wildcard native/rts_ai/*.h) $(wildcard native/rts_3d/*.h)
 rts_lib := build/libcoastal_rts.a
-rts_tests := $(addprefix $(rts_obj)/,isometric_test economy_test combat_test snapshot_test match_test worker_pool_test spatial_index_test ai_scout_test ai_industry_test ai_tactics_test)
+rts_tests := $(addprefix $(rts_obj)/,isometric_test economy_test combat_test snapshot_test match_test worker_pool_test spatial_index_test ai_scout_test ai_industry_test ai_tactics_test terrain3d_test camera3d_test scene3d_test)
 
 .PHONY: rts-test
 rts-test: $(rts_tests) $(rts_obj)/fixture.stamp
@@ -25,7 +27,15 @@ $(rts_ai_obj): | $(rts_obj)
 $(rts_ai_obj)/%.o: native/rts_ai/%.cpp $(rts_headers) | $(rts_ai_obj)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -O2 -Wall -Wextra -Wpedantic -c $< -o $@
 
-$(rts_lib): $(addprefix $(rts_obj)/,$(addsuffix .o,$(rts_sources))) $(addprefix $(rts_ai_obj)/,$(addsuffix .o,$(rts_ai_sources)))
+$(rts_3d_obj): | $(rts_obj)
+	mkdir -p $@
+
+$(rts_3d_obj)/%.o: native/rts_3d/%.cpp $(rts_headers) | $(rts_3d_obj)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -O2 -Wall -Wextra -Wpedantic -c $< -o $@
+
+$(rts_lib): $(addprefix $(rts_obj)/,$(addsuffix .o,$(rts_sources))) \
+           $(addprefix $(rts_ai_obj)/,$(addsuffix .o,$(rts_ai_sources))) \
+           $(addprefix $(rts_3d_obj)/,$(addsuffix .o,$(rts_3d_sources)))
 	$(AR) rcs $@ $^
 
 $(rts_obj)/%_test: tests/rts_%_test.cpp $(rts_lib) build/libnavigation.a $(rts_headers) | $(rts_obj)

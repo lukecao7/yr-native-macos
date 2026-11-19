@@ -39,6 +39,9 @@ void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = 
               << ",\"viewportHeight\":" << viewport.height
               << ",\"presentedFrames\":" << (metal ? metal->displayed_frames : metrics.presented_frames)
               << ",\"submittedFrames\":" << metrics.presented_frames
+              << ",\"displayed3dFrames\":" << (metal ? metal->displayed_scene_frames : 0)
+              << ",\"displayedModeSwitches\":" << (metal ? metal->mode_switches : 0)
+              << ",\"maxSwitchIntervalNs\":" << (metal ? metal->max_switch_interval.count() : 0)
               << ",\"fullOriginalFrames\":" << metrics.full_original_frames
               << ",\"activeObjects\":";
     if (metrics.active_objects) std::cout << *metrics.active_objects;
@@ -53,6 +56,8 @@ void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = 
     write_percentiles(metrics.frame_work);
     std::cout << ",\"presentationInterval\":";
     write_percentiles(metal ? metal->display_interval : metrics.presentation_interval);
+    std::cout << ",\"display3dInterval\":";
+    write_percentiles(metal ? metal->scene_interval : std::nullopt);
     std::cout << ",\"submissionInterval\":";
     write_percentiles(metrics.presentation_interval);
     std::cout << ",\"peakRssBytes\":";
@@ -106,6 +111,8 @@ void install_quit_menu(NSApplication* application) {
             _metal = [[CoastalMetalPresenter alloc] initWithViewport:_viewport];
         }
         if (_metal) {
+            const auto terrain = session->terrain_for_metal();
+            if (terrain) session->scene_available([_metal enableScene:terrain] == YES);
             self.layer = _metal.layer;
             self.wantsLayer = YES;
         } else {
@@ -317,7 +324,7 @@ int main(int argc, char** argv) {
             auto options = host::parse_launch_options(arguments, error);
             if (!options) return startup_error(error);
             if (options->help) {
-                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress] [--adaptive-ai]\n";
+                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress [--cycle-views]] [--adaptive-ai]\n";
                 return 0;
             }
 

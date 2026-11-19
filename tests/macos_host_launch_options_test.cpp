@@ -89,6 +89,9 @@ void test_launch_options() {
     expect(adaptive && adaptive->adaptive_ai && adaptive->threads == 4, "Adaptive rival");
     expect_invalid({"--adaptive-ai", "--stress"}, "Stress retains its fixed script");
     expect_invalid({"--adaptive-ai", "--adaptive-ai"}, "Duplicate AI flag");
+    auto cycling = parse({"--stress", "--cycle-views"}, error);
+    expect(cycling && cycling->cycle_views, "Repeatable stress view switching");
+    expect_invalid({"--cycle-views"}, "The timed view cycle belongs to the stress scenario");
 
     expect_invalid({"--data-dir"}, "Missing data directory argument");
     expect_invalid({"--data-dir", "--strict-audit"}, "A flag cannot be taken as the directory");

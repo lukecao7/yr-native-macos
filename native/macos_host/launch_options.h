@@ -18,6 +18,7 @@ struct LaunchOptions {
     bool stress = false;
     unsigned threads = 1;
     bool adaptive_ai = false;
+    bool cycle_views = false;
 };
 
 // Arguments exclude argv[0]. An omitted directory or map is represented by an empty value.

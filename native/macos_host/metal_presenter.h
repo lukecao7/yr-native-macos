@@ -9,7 +9,11 @@ namespace coastal::macos_host {
 
 struct MetalMetrics {
     std::uint64_t displayed_frames = 0;
+    std::uint64_t displayed_scene_frames = 0;
+    std::size_t mode_switches = 0;
     std::optional<Percentiles> display_interval;
+    std::optional<Percentiles> scene_interval;
+    std::chrono::nanoseconds max_switch_interval{};
 };
 
 }
@@ -20,6 +24,7 @@ struct MetalMetrics {
 - (instancetype)initWithViewport:(coastal::macos_host::Viewport)viewport;
 @property(nonatomic, readonly) CAMetalLayer* layer;
 - (std::span<std::uint8_t>)writablePixels;
+- (BOOL)enableScene:(const std::shared_ptr<const coastal::rts::view3d::TerrainMesh>&)terrain;
 - (BOOL)presentFrame:(const coastal::macos_host::Frame&)frame;
 - (coastal::macos_host::MetalMetrics)metrics;
 - (void)finish;

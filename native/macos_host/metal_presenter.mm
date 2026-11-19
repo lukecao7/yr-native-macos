@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #import "metal_presenter.h"
+#import "metal_scene.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <Metal/Metal.h>
@@ -68,49 +69,73 @@ struct FrameBuffer {
     id<MTLCommandBuffer> submission = nil;
 };
 
+struct PresentedFrame {
+    CFTimeInterval time = 0;
+    bool scene = false;
+};
+
+std::optional<host::Percentiles> summarize_intervals(std::vector<std::chrono::nanoseconds>& values) {
+    if (values.empty()) return std::nullopt;
+    std::sort(values.begin(), values.end());
+    const auto count = values.size();
+    const auto nearest_rank = [&](std::size_t percentile) {
+        return values[(count * percentile + 99) / 100 - 1];
+    };
+    return host::Percentiles{count, nearest_rank(50), nearest_rank(95), nearest_rank(99)};
+}
+
 // Callbacks retain this history independently of the window and presenter.
 class PresentationHistory {
 public:
-    void record(CFTimeInterval displayed_at) {
+    void record(CFTimeInterval displayed_at, bool scene) {
         if (displayed_at <= 0 || !std::isfinite(displayed_at)) return;
         const std::lock_guard lock(mutex_);
-        times_[count_ % times_.size()] = displayed_at;
+        times_[count_ % times_.size()] = {displayed_at, scene};
         ++count_;
+        if (scene) ++scene_count_;
     }
 
     host::MetalMetrics metrics() const {
         host::MetalMetrics result;
-        std::vector<CFTimeInterval> times;
-        std::size_t size;
+        std::vector<PresentedFrame> times;
         {
             const std::lock_guard lock(mutex_);
             result.displayed_frames = count_;
-            size = std::min<std::uint64_t>(count_, times_.size());
+            result.displayed_scene_frames = scene_count_;
+            const auto size = std::min<std::uint64_t>(count_, times_.size());
             times.assign(times_.begin(), times_.begin() + size);
         }
-        if (size < 2) return result;
+        if (times.size() < 2) return result;
 
         // Callback delivery order can differ from the actual display order.
-        std::sort(times.begin(), times.begin() + size);
-        std::vector<std::chrono::nanoseconds> intervals(size - 1);
-        for (std::size_t i = 1; i < size; ++i) {
-            const double seconds = times[i] - times[i - 1];
-            intervals[i - 1] = std::chrono::nanoseconds(std::llround(seconds * 1'000'000'000));
+        std::sort(times.begin(), times.end(), [](const PresentedFrame& a, const PresentedFrame& b) {
+            return a.time < b.time;
+        });
+        std::vector<std::chrono::nanoseconds> intervals;
+        std::vector<std::chrono::nanoseconds> scene_intervals;
+        intervals.reserve(times.size() - 1);
+        for (std::size_t i = 1; i < times.size(); ++i) {
+            const auto& before = times[i - 1];
+            const auto& after = times[i];
+            const auto interval = std::chrono::nanoseconds(std::llround((after.time - before.time) * 1'000'000'000));
+            intervals.push_back(interval);
+            if (before.scene != after.scene) {
+                ++result.mode_switches;
+                result.max_switch_interval = std::max(result.max_switch_interval, interval);
+            } else if (after.scene) {
+                scene_intervals.push_back(interval);
+            }
         }
-        const std::size_t sample_count = size - 1;
-        std::sort(intervals.begin(), intervals.begin() + sample_count);
-        const auto nearest_rank = [&](std::size_t percentile) {
-            return intervals[(sample_count * percentile + 99) / 100 - 1];
-        };
-        result.display_interval = host::Percentiles{sample_count, nearest_rank(50),
-                                                    nearest_rank(95), nearest_rank(99)};
+        result.display_interval = summarize_intervals(intervals);
+        result.scene_interval = summarize_intervals(scene_intervals);
         return result;
     }
 
 private:
     mutable std::mutex mutex_;
-    std::array<CFTimeInterval, presentation_samples> times_{};
+    std::array<PresentedFrame, presentation_samples> times_{};
     std::uint64_t count_ = 0;
+    std::uint64_t scene_count_ = 0;
 };
 
 }  // namespace
@@ -120,6 +145,7 @@ private:
     id<CAMetalDrawable> _drawable;
     id<MTLCommandQueue> _queue;
     id<MTLRenderPipelineState> _pipeline;
+    CoastalMetalScene* _scene;
     std::array<FrameBuffer, buffer_count> _buffers;
     std::shared_ptr<PresentationHistory> _history;
     std::size_t _byteCount;
@@ -211,31 +237,45 @@ private:
     return {};
 }
 
+- (BOOL)enableScene:(const std::shared_ptr<const coastal::rts::view3d::TerrainMesh>&)terrain {
+    auto* renderer = [[CoastalMetalScene alloc] initWithDevice:_layer.device pixelFormat:_layer.pixelFormat];
+    if (!renderer || ![renderer prepareTerrain:terrain]) return NO;
+    _scene = renderer;
+    return YES;
+}
+
 - (BOOL)presentFrame:(const host::Frame&)frame {
     id<CAMetalDrawable> drawable = _drawable;
     _drawable = nil;
     if (!drawable) return NO;
     auto& buffer = _buffers[_writingBuffer];
-    if (frame.rgba.data() != buffer.pixels.contents || frame.rgba.size() != _byteCount) return NO;
+    const bool scene = frame.scene != nullptr;
+    if (!scene && (frame.rgba.data() != buffer.pixels.contents || frame.rgba.size() != _byteCount)) return NO;
 
     id<MTLCommandBuffer> command = [_queue commandBuffer];
     if (!command) return NO;
-    MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    auto* color = pass.colorAttachments[0];
-    color.texture = drawable.texture;
-    color.loadAction = MTLLoadActionDontCare;
-    color.storeAction = MTLStoreActionStore;
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-    if (!encoder) return NO;
-    [encoder setRenderPipelineState:_pipeline];
-    [encoder setFragmentTexture:buffer.texture atIndex:0];
-    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-    [encoder endEncoding];
+    if (scene) {
+        if (!_scene || ![_scene encodeScene:*frame.scene target:drawable.texture command:command slot:_writingBuffer]) {
+            return NO;
+        }
+    } else {
+        MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        auto* color = pass.colorAttachments[0];
+        color.texture = drawable.texture;
+        color.loadAction = MTLLoadActionDontCare;
+        color.storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+        if (!encoder) return NO;
+        [encoder setRenderPipelineState:_pipeline];
+        [encoder setFragmentTexture:buffer.texture atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [encoder endEncoding];
+    }
 
     if (@available(macOS 10.15.4, *)) {
         const auto history = _history;
         [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
-            history->record(shown.presentedTime);
+            history->record(shown.presentedTime, scene);
         }];
     }
     [command presentDrawable:drawable];

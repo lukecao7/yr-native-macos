@@ -50,10 +50,11 @@ std::optional<LaunchOptions> parse_launch_options(
             continue;
         }
         if (argument == "--strict-audit" || argument == "--help" || argument == "--stress" ||
-            argument == "--adaptive-ai") {
+            argument == "--adaptive-ai" || argument == "--cycle-views") {
             bool& enabled = argument == "--strict-audit" ? options.strict_audit :
                             argument == "--help" ? options.help :
-                            argument == "--stress" ? options.stress : options.adaptive_ai;
+                            argument == "--stress" ? options.stress :
+                            argument == "--adaptive-ai" ? options.adaptive_ai : options.cycle_views;
             if (enabled) {
                 error = "Specify " + std::string(argument) + " once.";
                 return std::nullopt;
@@ -101,6 +102,10 @@ std::optional<LaunchOptions> parse_launch_options(
     }
     if (options.stress && options.adaptive_ai) {
         error = "--adaptive-ai is for skirmishes.";
+        return std::nullopt;
+    }
+    if (options.cycle_views && !options.stress) {
+        error = "--cycle-views requires --stress.";
         return std::nullopt;
     }
     return options;

@@ -8,6 +8,11 @@
 #include <span>
 #include <string_view>
 
+namespace coastal::rts::view3d {
+struct TerrainMesh;
+struct SceneFrame;
+}
+
 namespace coastal::macos_host {
 
 struct Viewport {
@@ -22,6 +27,8 @@ struct Frame {
     // An optional owner for the pixel storage. When supplied, the span must stay
     // valid and its bytes unchanged until the last reference is released.
     std::shared_ptr<const void> rgba_owner{};
+    // A live Metal scene may replace RGBA pixels until the next advance.
+    const rts::view3d::SceneFrame* scene = nullptr;
 };
 
 using InputModifiers = std::uint64_t;
@@ -86,6 +93,8 @@ public:
     virtual void scroll_event(ScrollEvent) noexcept {}
     virtual void key_event(KeyEvent) noexcept {}
     virtual void input_focus_lost() noexcept {}
+    virtual std::shared_ptr<const rts::view3d::TerrainMesh> terrain_for_metal() { return {}; }
+    virtual void scene_available(bool) noexcept {}
 };
 
 // Implemented by the runtime linked with the host. Options carry the resolved
