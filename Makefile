@@ -29,3 +29,5 @@ check:
 
 test: $(test_bins)
 	@set -e; for program in $(test_bins); do ./$$program; done
+
+include native/macos_host/Makefile

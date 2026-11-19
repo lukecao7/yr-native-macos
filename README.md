@@ -40,6 +40,20 @@ make
 附自制数据测试与收尾修复，见 [Hy 原型批次](experiments/hy-batches/README.md)。第五批按部分交付关闭，
 第六批未启动；这些组件尚未集成为可玩的游戏，也不证明原版规则对齐或多核加速。
 
+## macOS 独立宿主测试
+
+在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主并运行三组独立测试。测试检查启动参数、只读 MIX 档案和帧调度。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略数据目录时，宿主打开系统目录选择器。正式地图需要接入可调用的对局运行时。 [Demo 任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10)
+
+以下命令用自制档案启动测试窗口。点击画面可移动色块，按 Cmd+Q 或关闭窗口可退出。终端会记录帧数、帧耗时分位数和峰值内存。
+
+```sh
+make macos-host-fixture
+fixture_dir=$(mktemp -d)
+python3 tests/macos_host_fixture_data.py "$fixture_dir"
+./build/CoastalHostFixture.app/Contents/MacOS/CoastalMacHost \
+  --data-dir "$fixture_dir" --skirmish-map Fixture.map
+```
+
 ## 一起开发
 
 动手前先查已有 Issue 和进行中的 PR，在原讨论里说明谁负责哪一部分。一个 PR 解决一个能独立验证的问题，相关测试随改动一起提交。性能改动请附地图大小、线程数、硬件及串行对照。[认领任务和拆分 PR 的方法](CONTRIBUTING.md)
