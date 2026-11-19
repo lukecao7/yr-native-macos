@@ -9,6 +9,7 @@
 #include <cmath>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 
 namespace host = coastal::macos_host;
 
@@ -17,7 +18,8 @@ namespace {
 constexpr MTLPixelFormat source_format = MTLPixelFormatRGBA8Unorm;
 constexpr MTLPixelFormat drawable_format = MTLPixelFormatBGRA8Unorm;
 constexpr std::size_t buffer_count = 2;
-constexpr std::size_t presentation_samples = 4097;
+// Covers a complete five-minute 60 Hz endurance check with a fixed memory bound.
+constexpr std::size_t presentation_samples = 32'769;
 constexpr std::uint32_t max_texture_dimension = 16384;
 
 constexpr char shader_source[] = R"metal(
@@ -78,19 +80,19 @@ public:
 
     host::MetalMetrics metrics() const {
         host::MetalMetrics result;
-        std::array<CFTimeInterval, presentation_samples> times;
+        std::vector<CFTimeInterval> times;
         std::size_t size;
         {
             const std::lock_guard lock(mutex_);
             result.displayed_frames = count_;
-            size = std::min<std::uint64_t>(count_, times.size());
-            std::copy_n(times_.begin(), size, times.begin());
+            size = std::min<std::uint64_t>(count_, times_.size());
+            times.assign(times_.begin(), times_.begin() + size);
         }
         if (size < 2) return result;
 
         // Callback delivery order can differ from the actual display order.
         std::sort(times.begin(), times.begin() + size);
-        std::array<std::chrono::nanoseconds, presentation_samples - 1> intervals;
+        std::vector<std::chrono::nanoseconds> intervals(size - 1);
         for (std::size_t i = 1; i < size; ++i) {
             const double seconds = times[i] - times[i - 1];
             intervals[i - 1] = std::chrono::nanoseconds(std::llround(seconds * 1'000'000'000));

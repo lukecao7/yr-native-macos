@@ -77,6 +77,15 @@ void test_launch_options() {
     expect(map_only && map_only->data_directory.empty() && map_only->skirmish_map == "Demo.map",
            "Map argument allows the directory picker");
 
+    auto stress = parse({"--stress", "--threads=8", "--strict-audit"}, error);
+    expect(stress && stress->stress && stress->threads == 8 && stress->strict_audit, "Stress setup");
+    expect(defaults && defaults->threads == 1 && !defaults->stress, "Single-thread default");
+    expect_invalid({"--threads=0"}, "Zero workers is invalid");
+    expect_invalid({"--threads=16"}, "Unsupported worker count");
+    expect_invalid({"--threads=1", "--threads=4"}, "Duplicate worker count");
+    expect_invalid({"--stress", "--skirmish-map=Basin.map"}, "Stress fixture has a fixed map");
+    expect_invalid({"--stress", "--stress"}, "Duplicate stress flag");
+
     expect_invalid({"--data-dir"}, "Missing data directory argument");
     expect_invalid({"--data-dir", "--strict-audit"}, "A flag cannot be taken as the directory");
     expect_invalid({"--data-dir="}, "Empty inline data directory");

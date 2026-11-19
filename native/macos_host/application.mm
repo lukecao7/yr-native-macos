@@ -170,7 +170,9 @@ void install_quit_menu(NSApplication* application) {
 @end
 
 @interface CoastalAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
-- (instancetype)initWithSession:(host::Session*)session launchedAt:(host::FrameClock::time_point)launchedAt;
+- (instancetype)initWithSession:(host::Session*)session
+                      launchedAt:(host::FrameClock::time_point)launchedAt
+                    stressWindow:(BOOL)stressWindow;
 - (void)start;
 - (void)detach;
 - (int)status;
@@ -188,7 +190,9 @@ void install_quit_menu(NSApplication* application) {
     int _status;
 }
 
-- (instancetype)initWithSession:(host::Session*)session launchedAt:(host::FrameClock::time_point)launchedAt {
+- (instancetype)initWithSession:(host::Session*)session
+                      launchedAt:(host::FrameClock::time_point)launchedAt
+                    stressWindow:(BOOL)stressWindow {
     if (!(self = [super init])) return nil;
     _session = session;
     _loop = std::make_unique<host::FrameLoop>(session->frame_interval(), launchedAt);
@@ -206,7 +210,16 @@ void install_quit_menu(NSApplication* application) {
     _window.contentView = _surface;
     _window.acceptsMouseMovedEvents = YES;
     _window.delegate = self;
-    [_window center];
+    if (stressWindow) {
+        const NSRect available = NSScreen.mainScreen.visibleFrame;
+        _window.level = NSFloatingWindowLevel;
+        _window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                     NSWindowCollectionBehaviorFullScreenAuxiliary;
+        [_window setFrameTopLeftPoint:NSMakePoint(NSMaxX(available) - NSWidth(_window.frame) - 16,
+                                                  NSMaxY(available) - 16)];
+    } else {
+        [_window center];
+    }
     return self;
 }
 
@@ -304,13 +317,15 @@ int main(int argc, char** argv) {
             auto options = host::parse_launch_options(arguments, error);
             if (!options) return startup_error(error);
             if (options->help) {
-                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit]\n";
+                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress]\n";
                 return 0;
             }
 
-            auto directory = host::resolve_data_directory(options->data_directory, error);
-            if (!directory) return error.empty() ? 0 : startup_error(error);
-            options->data_directory = std::move(*directory);
+            if (!options->stress || !options->data_directory.empty()) {
+                auto directory = host::resolve_data_directory(options->data_directory, error);
+                if (!directory) return error.empty() ? 0 : startup_error(error);
+                options->data_directory = std::move(*directory);
+            }
             auto session = host::create_session(*options, error);
             if (!session) return startup_error(error.empty() ? "The session runtime could not start." : error);
             const auto viewport = session->viewport();
@@ -328,11 +343,18 @@ int main(int argc, char** argv) {
                 [application finishLaunching];
             }
             install_quit_menu(application);
-            auto* delegate = [[CoastalAppDelegate alloc] initWithSession:session.get() launchedAt:launchedAt];
+            auto* delegate = [[CoastalAppDelegate alloc] initWithSession:session.get()
+                                                               launchedAt:launchedAt
+                                                             stressWindow:options->stress];
             if (!delegate) return startup_error("Could not create a Mac window.");
             application.delegate = delegate;
+            id<NSObject> stressActivity = options->stress
+                ? [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
+                                                               reason:@"CoastalHost display benchmark"]
+                : nil;
             [delegate start];
             [application run];
+            if (stressActivity) [NSProcessInfo.processInfo endActivity:stressActivity];
             application.delegate = nil;
             const auto metal = [delegate finishPresentation];
             [delegate detach];

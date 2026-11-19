@@ -224,8 +224,86 @@ void run() {
         for(int goal:{0,1000,60000,65535})exact=exact&&cache.find(goal)->distance==legacy(grid,goal,256,256);
         check("Actual 256-square fields preserve the complete original integer distances",exact&&cache.stats().pinned_distance_bytes==4U*262144U);
         evidence["one_256_squared_field_bytes"]=262144;
-        evidence["maximum_2200_active_distance_bytes_at_256_squared"]=2200ULL*262144ULL;
         evidence["default_inactive_budget_bytes"]=8U*1024U*1024U;
+    }
+    {
+        constexpr int extent = 16;
+        constexpr auto bytes_per_field = extent * extent * sizeof(std::int32_t);
+        auto grid = map_grid(extent, extent);
+        FlowCache cache(0, 20, 4 * bytes_per_field);
+        require(cache.configure(extent, extent, grid, 1, error), error);
+        require(cache.set_active({0, 1}, error), error);
+        require(cache.prepare_active(error), error);
+        const auto* retained = cache.find(0);
+        require(cache.set_active({1, 0, 0}, error), error);
+        check("Changing multiplicities without changing goals preserves cached pins",
+              cache.find(0) == retained && cache.reference_count(0) == 2 &&
+              cache.stats().active_references == 3);
+        grid[5] = 1;
+        require(cache.set_grid(grid, 2, error), error);
+        const auto stats = cache.stats();
+        check("The budget includes both published and staged repair arrays",
+              cache.find(0) == retained && stats.fields_repaired == 2 &&
+              stats.peak_resident_distance_bytes == 2 * bytes_per_field &&
+              stats.peak_total_distance_bytes == 4 * bytes_per_field &&
+              retained->distance == legacy(grid, 0, extent, extent));
+        auto too_large = map_grid(64, 64);
+        check("A cap too small for one field rejects reconfiguration atomically",
+              !cache.configure(64, 64, too_large, 3, error) && cache.find(0) == retained &&
+              cache.export_active().map_revision == 2);
+    }
+    {
+        constexpr int extent = 512;
+        constexpr std::size_t cap = FlowCache::default_distance_budget;
+        constexpr auto field_size = extent * extent * sizeof(std::int32_t);
+        std::vector<unsigned char> grid(extent * extent, 1);
+        std::vector<int> goals;
+        for (int y = 1; y < extent && goals.size() < 2200; y += 3) {
+            for (int x = 1; x < extent && goals.size() < 2200; x += 3) {
+                const auto goal = y * extent + x;
+                grid[goal] = 0;
+                goals.push_back(goal);
+            }
+        }
+        FlowCache cache;
+        require(cache.configure(extent, extent, grid, 23, error), error);
+        require(cache.set_active(goals, error), error);
+        require(cache.prepare_active(error, 4), error);
+        const auto filled = cache.stats();
+        check("2200 live targets on a 512-square map retain 256 distance arrays under the hard cap",
+              filled.active_references == goals.size() && filled.active_goals == goals.size() &&
+              filled.pinned_fields == cap / field_size && filled.uncached_active_goals == goals.size() - cap / field_size &&
+              filled.distance_budget_bytes == cap && filled.peak_total_distance_bytes == cap);
+        for (int repeat = 0; repeat < 4; ++repeat) require(cache.prepare_active(error, 4), error);
+        check("Repeated oversubscribed preparation keeps the same resident cohort",
+              cache.stats().fields_built == filled.fields_built && cache.find(goals.front()) &&
+              !cache.find(goals.back()) && cache.reference_count(goals.back()) == 1);
+
+        std::vector<std::int32_t> values;
+        require(cache.sample(goals.front(), {goals.front()}, values, error), error);
+        require(cache.sample(goals.back(), {goals.back(), goals.front()}, values, error), error);
+        check("Cold sampling evicts the oldest generation and preserves active references",
+              values == std::vector<std::int32_t>({0, -1}) && cache.find(goals.front()) &&
+              !cache.find(goals[1]) && cache.reference_count(goals[1]) == 1 &&
+              cache.find(goals.back()) && cache.stats().peak_total_distance_bytes == cap);
+
+        grid[goals.back() + 1] = 0;
+        require(cache.set_grid(grid, 24, error), error);
+        check("Topology changes retire stale derived arrays when repair copies would exceed the cap",
+              cache.stats().resident_distance_bytes == 0 && cache.export_active().active_goals == goals);
+        require(cache.prepare_active(error, 4), error);
+        require(cache.sample(goals.back(), {goals.back() + 1}, values, error), error);
+        check("The new topology rebuilds exact field values within the same cap",
+              values == std::vector<std::int32_t>({1000}) && cache.stats().peak_total_distance_bytes == cap);
+
+        const auto stats = cache.stats();
+        evidence["flow_512_squared_active_goals"] = stats.active_goals;
+        evidence["flow_512_squared_peak_total_distance_bytes"] = stats.peak_total_distance_bytes;
+        evidence["flow_default_total_distance_budget_bytes"] = stats.distance_budget_bytes;
+        cache.set_inactive_budget(0);
+        require(cache.set_active({}, error), error);
+        check("Releasing stress references frees all retained distance arrays",
+              cache.stats().resident_fields == 0 && cache.stats().resident_distance_bytes == 0);
     }
 }
 }

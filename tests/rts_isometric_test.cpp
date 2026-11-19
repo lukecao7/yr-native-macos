@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "rts_core/iso.h"
+#include "rts_core/worker_pool.h"
 
 #include <algorithm>
 #include <array>
@@ -231,6 +232,79 @@ void check_layers(Map map) {
            "Invalid cameras and mismatched frame sizes are rejected");
 }
 
+void check_tiled_raster() {
+    World world;
+    world.map.width = world.map.height = 512;
+    world.map.tiles.resize(512 * 512);
+    for (int y = 226; y < 288; ++y) {
+        for (int x = 220; x < 290; ++x) {
+            auto& tile = world.map.at({x, y});
+            if ((x + y) % 11 == 0) tile = {Terrain::Ramp, 1, 0};
+            else if ((2 * x + y) % 17 == 0) tile = {Terrain::Ground, 2, 0};
+            else if ((x + 2 * y) % 19 == 0) tile = {Terrain::Deposit, 0, 200};
+            else if ((x - y) % 13 == 0) tile = {Terrain::Rock, 0, 0};
+            else if ((x + y) % 7 == 0) tile = {Terrain::Water, 0, 0};
+        }
+    }
+    for (auto& rule : world.rules.units) rule.hp = 120;
+    constexpr auto kinds = static_cast<unsigned>(UnitKind::Count);
+    for (unsigned i = 0; i < 1200; ++i) {
+        const Cell cell{236 + int(i % 40), 241 + int(i / 40)};
+        Entity unit{};
+        unit.id = i + 1;
+        unit.kind = static_cast<UnitKind>(i % kinds);
+        unit.side = i % 2 == 0 ? Side::Blue : Side::Copper;
+        unit.position = cell;
+        unit.hp = static_cast<std::uint16_t>(15 + i % 105);
+        unit.facing = {i % 4 >= 2 ? 1 : -1, i % 2 == 0 ? 1 : -1};
+        if (unit.kind == UnitKind::Collector) unit.cargo = 20;
+        world.entities.push_back(unit);
+        if (i % 4 == 0) world.side(Side::Blue).selected.push_back(unit.id);
+        if (i % 2 == 0) world.projectiles.push_back({i + 1, i + 2, cell, {cell.x + 3, cell.y - 2}, 4, 9, 20});
+    }
+
+    WorkerPool one(1);
+    WorkerPool four(4, true);
+    WorkerPool eight(8, true);
+    struct FrameCase {
+        int width;
+        int height;
+        double zoom;
+    };
+    constexpr std::array cases{
+        FrameCase{1024, 768, 0.55},
+        FrameCase{325, 197, 1.37},
+        FrameCase{127, 65, 2.0},
+        FrameCase{1, 1, 1.0},
+    };
+    for (const auto [w, h, zoom] : cases) {
+        Camera camera;
+        camera.zoom = zoom;
+        camera.center_on({252, 252}, world.map);
+        camera.pan(63.25, -31.5);
+        camera.advance();
+        ViewOverlay overlay;
+        overlay.build_cell = Cell{252, 253};
+        overlay.can_build = zoom < 1;
+        overlay.drag = SelectionBox{{w - 3, 64}, {-4, h - 1}};
+        const std::size_t size = std::size_t(w) * h * 4;
+        std::vector<std::uint8_t> expected(size);
+        expect(render_isometric(world, camera, overlay, expected, w, h),
+               "The serial raster renders a crowded isometric frame");
+        for (auto* pool : {&one, &four, &eight}) {
+            std::vector<std::uint8_t> guarded(size + 2, 0x7b);
+            auto pixels = std::span(guarded).subspan(1, size);
+            expect(render_isometric(world, camera, overlay, pixels, w, h, pool) &&
+                   std::ranges::equal(expected, pixels), "Pixel seams and layer order match the serial raster");
+            expect(guarded.front() == 0x7b && guarded.back() == 0x7b,
+                   "Partial tiles do not write outside the frame");
+        }
+    }
+    const auto used = [](const auto& lane) { return lane.jobs > 0; };
+    expect(std::ranges::count_if(four.usage(), used) == 4 && std::ranges::count_if(eight.usage(), used) == 8,
+           "All worker lanes render part of the crowded frame");
+}
+
 }  // namespace
 
 int main() {
@@ -240,7 +314,8 @@ int main() {
         reject_invalid_maps(files);
         check_projection(map);
         check_layers(map);
-        std::cout << "RTS isometric tests passed (map, camera, picking and rendered layers)\n";
+        check_tiled_raster();
+        std::cout << "RTS isometric tests passed (map, camera, picking, layers and 1/4/8-lane raster parity)\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "rts_isometric_test: " << error.what() << '\n';

@@ -80,6 +80,18 @@ python3 tests/rts_fixture_data.py "$match_dir"
 
 自制 `COASTAL_MAP` 文本地图使用 `.` 平地、`/` 坡道、`=` 高地、`~` 水面、`#` 障碍、`o` 矿点、`a` 和 `b` 两方出生格。`coastal_rules.tsv` 保存造价、生命、速度、视野、伤害和生产参数。
 
+## 多核与千单位验证
+
+一般对局可用 `--threads=1`、`--threads=4` 或 `--threads=8` 选择计算线程数。默认用单线程。模拟先根据同一时点并行计算，再按单位 ID 顺序处理移动冲突、攻击和随机数。等距画面按 64×64 像素分块，同一地图和相机在各线程配置下得到一致的像素。
+
+```sh
+make -j4 CXXFLAGS='-std=c++20 -pthread -O2' rts-stress-bench macos-host
+./build/rts_core/stress_bench --threads=1,4,8 --steps=3600
+./build/CoastalHost.app/Contents/MacOS/CoastalMacHost --stress --threads=8 --strict-audit
+```
+
+压力场景使用 512×512 自制岛屿和 1,200 个单位。基准逐组计时，每 60 步比较完整存档和两方视野。压力窗口位于屏幕角落并保持可见，便于换到其他应用时继续记录实际显示帧间隔与进程峰值内存。距离数组默认共享 256 MiB 总预算，包含驻留、并行构建和修复所需的距离数组。满额后目标引用仍然有效，冷路径可以按需查询准确距离。
+
 ## 一起开发
 
 动手前先查已有 Issue 和进行中的 PR，在原讨论里说明谁负责哪一部分。一个 PR 解决一个能独立验证的问题，相关测试随改动一起提交。性能改动请附地图大小、线程数、硬件及串行对照。[认领任务和拆分 PR 的方法](CONTRIBUTING.md)

@@ -35,11 +35,23 @@ std::optional<LaunchOptions> parse_launch_options(
     std::span<const std::string_view> arguments, std::string& error) {
     error.clear();
     LaunchOptions options;
+    bool threads_set = false;
 
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         const auto argument = arguments[i];
-        if (argument == "--strict-audit" || argument == "--help") {
-            bool& enabled = argument == "--strict-audit" ? options.strict_audit : options.help;
+        if (argument.starts_with("--threads=")) {
+            const auto value = argument.substr(sizeof("--threads=") - 1);
+            if (threads_set || (value != "1" && value != "4" && value != "8")) {
+                error = "Specify --threads=1, --threads=4, or --threads=8 once.";
+                return std::nullopt;
+            }
+            options.threads = static_cast<unsigned>(value.front() - '0');
+            threads_set = true;
+            continue;
+        }
+        if (argument == "--strict-audit" || argument == "--help" || argument == "--stress") {
+            bool& enabled = argument == "--strict-audit" ? options.strict_audit :
+                            argument == "--help" ? options.help : options.stress;
             if (enabled) {
                 error = "Specify " + std::string(argument) + " once.";
                 return std::nullopt;
@@ -80,6 +92,10 @@ std::optional<LaunchOptions> parse_launch_options(
             }
             options.skirmish_map = value;
         }
+    }
+    if (options.stress && !options.skirmish_map.empty()) {
+        error = "--stress uses its own map.";
+        return std::nullopt;
     }
     return options;
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "rts_core/iso.h"
+#include "rts_core/worker_pool.h"
 
 #include <algorithm>
 #include <array>
@@ -72,6 +73,11 @@ struct Rect {
     int bottom;
 };
 
+bool visible(Rect view, PixelPoint point, int radius) noexcept {
+    return point.x >= view.left - radius && point.y >= view.top - radius &&
+           point.x < view.right + radius && point.y < view.bottom + radius;
+}
+
 using Color = std::array<std::uint8_t, 4>;
 
 constexpr Color color(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
@@ -90,20 +96,16 @@ Color faction_color(Side side) {
 
 class Canvas {
 public:
-    Canvas(std::span<std::uint8_t> pixels, int width, int height)
-        : pixels_(pixels), width_(width), height_(height) {}
-
-    bool visible(PixelPoint point, int radius) const noexcept {
-        return point.x >= -radius && point.y >= -radius &&
-               point.x < width_ + radius && point.y < height_ + radius;
-    }
+    Canvas(std::span<std::uint8_t> pixels, int width, Rect clip)
+        : pixels_(pixels), width_(width), clip_(clip) {}
 
     void rect(Rect box, Color fill) {
-        const int left = std::max(box.left, 0);
-        const int right = std::min(box.right, width_);
+        const int left = std::max(box.left, clip_.left);
+        const int right = std::min(box.right, clip_.right);
         if (left >= right) return;
 
-        for (int y = std::max(box.top, 0); y < std::min(box.bottom, height_); ++y) {
+        const int bottom = std::min(box.bottom, clip_.bottom);
+        for (int y = std::max(box.top, clip_.top); y < bottom; ++y) {
             auto* out = pixels_.data() + (std::size_t(y) * width_ + left) * fill.size();
             for (int x = left; x < right; ++x, out += fill.size()) {
                 std::memcpy(out, fill.data(), fill.size());
@@ -119,6 +121,8 @@ public:
     }
 
     void line(PixelPoint from, PixelPoint to, Color ink) {
+        if (std::max(from.x, to.x) < clip_.left || std::min(from.x, to.x) >= clip_.right ||
+            std::max(from.y, to.y) < clip_.top || std::min(from.y, to.y) >= clip_.bottom) return;
         const int dx = std::abs(to.x - from.x);
         const int dy = -std::abs(to.y - from.y);
         const int sx = from.x < to.x ? 1 : -1;
@@ -140,8 +144,8 @@ public:
     }
 
     void diamond(PixelPoint center, int half_width, int half_height, Color fill) {
-        const int top = std::max(-half_height, -center.y);
-        const int bottom = std::min(half_height, height_ - center.y - 1);
+        const int top = std::max(-half_height, clip_.top - center.y);
+        const int bottom = std::min(half_height, clip_.bottom - center.y - 1);
         for (int y = top; y <= bottom; ++y) {
             const int radius = half_width * (half_height - std::abs(y)) / half_height;
             rect({center.x - radius, center.y + y, center.x + radius + 1, center.y + y + 1}, fill);
@@ -164,7 +168,9 @@ public:
         // A vertical extrusion of a screen-space diamond. Each wall is a set
         // of clipped columns below the front two edges of the top face.
         const PixelPoint top{foot.x, foot.y - rise};
-        for (int x = -half_width; x <= half_width; ++x) {
+        const int left = std::max(-half_width, clip_.left - top.x);
+        const int right = std::min(half_width, clip_.right - top.x - 1);
+        for (int x = left; x <= right; ++x) {
             const int edge = top.y + half_height * (half_width - std::abs(x)) / half_width;
             rect({top.x + x, edge, top.x + x + 1, edge + rise + 1},
                  x < 0 ? left_wall : right_wall);
@@ -175,7 +181,7 @@ public:
 private:
     std::span<std::uint8_t> pixels_;
     int width_;
-    int height_;
+    Rect clip_;
 };
 
 Color terrain_color(Tile tile, bool alternate = false) {
@@ -195,15 +201,18 @@ Color terrain_color(Tile tile, bool alternate = false) {
     return background;
 }
 
-void draw_terrain(Canvas& canvas, const Map& map, const Projection& projection, Cell cell) {
-    const auto point = projection.project(map, cell);
+int scaled_px(double value, const Projection& projection) {
+    return std::max(1, int(std::lround(value * projection.zoom)));
+}
+
+void draw_terrain(Canvas& canvas, const Map& map, const Projection& projection, Cell cell,
+                  PixelPoint point) {
     const int hw = projection.half_width;
     const int hh = projection.half_height;
-    if (!canvas.visible(point, hw + 8)) return;
 
     const Tile& tile = map.at(cell);
     const Color top = terrain_color(tile, ((cell.x ^ cell.y) & 1) != 0);
-    const auto size = [&](double value) { return std::max(1, int(std::lround(value * projection.zoom))); };
+    const auto size = [&](double value) { return scaled_px(value, projection); };
     if (tile.height) {
         const int rise = size(elevation_step * tile.height);
         canvas.block({point.x, point.y + rise}, hw, hh, rise,
@@ -260,7 +269,7 @@ Rect visible_cells(const Map& map, const Projection& projection, int width, int 
 
 void draw_entity(Canvas& canvas, const World& world, const Projection& projection,
                  const Entity& entity, PixelPoint point, bool selected) {
-    const auto size = [&](double value) { return std::max(1, int(std::lround(value * projection.zoom))); };
+    const auto size = [&](double value) { return scaled_px(value, projection); };
     const auto accent = faction_color(entity.side);
     const bool building = is_building(entity.kind);
     const int extent = building ? (entity.kind == UnitKind::Hub ? 14 : 12) :
@@ -320,22 +329,37 @@ void draw_entity(Canvas& canvas, const World& world, const Projection& projectio
                 entity.hp * 3 <= full_hp ? color(241, 126, 99) : color(161, 224, 137));
 }
 
-void draw_projectiles(Canvas& canvas, const World& world, const Projection& projection) {
-    for (const auto& projectile : world.projectiles) {
-        if (projectile.travel_ticks == 0 || !world.map.contains(projectile.from) ||
-            !world.map.contains(projectile.to)) continue;
-
-        const auto from = projection.project(world.map, projectile.from);
-        const auto to = projection.project(world.map, projectile.to);
-        const double progress = 1 - std::min(1.0, double(projectile.remaining) / projectile.travel_ticks);
-        const auto blend = [&](int begin, int end) { return int(std::lround(std::lerp(begin, end, progress))); };
-        const int x = blend(from.x, to.x);
-        const int y = blend(from.y, to.y) - int(std::lround((5 + 9 * progress * (1 - progress)) * projection.zoom));
-        if (canvas.visible({x, y}, 3)) {
-            canvas.diamond({x, y}, 2, 2, resource_gold);
-        }
+std::optional<PixelPoint> projectile_center(const Map& map, const Projection& projection,
+                                          const Projectile& projectile) {
+    if (projectile.travel_ticks == 0 || !map.contains(projectile.from) || !map.contains(projectile.to)) {
+        return std::nullopt;
     }
+    const auto from = projection.project(map, projectile.from);
+    const auto to = projection.project(map, projectile.to);
+    const double progress = 1 - std::min(1.0, double(projectile.remaining) / projectile.travel_ticks);
+    const auto blend = [&](int begin, int end) { return int(std::lround(std::lerp(begin, end, progress))); };
+    const int arc = int(std::lround((5 + 9 * progress * (1 - progress)) * projection.zoom));
+    return PixelPoint{blend(from.x, to.x), blend(from.y, to.y) - arc};
 }
+
+struct TerrainSprite {
+    Cell cell;
+    PixelPoint center;
+};
+
+struct EntitySprite {
+    const Entity* entity;
+    PixelPoint foot;
+    bool selected;
+};
+
+struct RasterRegion {
+    Rect clip{};
+    std::vector<TerrainSprite> terrain;
+    std::vector<EntitySprite> entities;
+    std::vector<PixelPoint> projectiles;
+    bool preview = false;
+};
 
 void draw_minimap(Canvas& canvas, const World& world, const Projection& projection,
                   int width, int height) {
@@ -533,7 +557,7 @@ std::optional<Cell> pick_cell(const Map& map, const Camera& camera, PixelPoint p
 }
 
 bool render_isometric(const World& world, const Camera& camera, const ViewOverlay& overlay,
-                      std::span<std::uint8_t> rgba, int width, int height) {
+                      std::span<std::uint8_t> rgba, int width, int height, WorkerPool* workers) {
     constexpr int maximum_viewport = 16'384;
     if (!valid_map(world.map) || !valid_camera(camera) || width < 1 || height < 1 ||
         width > maximum_viewport || height > maximum_viewport ||
@@ -542,41 +566,116 @@ bool render_isometric(const World& world, const Camera& camera, const ViewOverla
     }
 
     const Projection projection(camera, width, height);
-    Canvas canvas(rgba, width, height);
-    canvas.rect({0, 0, width, height}, background);
+    const Rect viewport{0, 0, width, height};
+    const int chunk = workers && workers->count() > 1 ? 64 : std::max(width, height);
+    const int columns = (width + chunk - 1) / chunk;
+    const int rows = (height + chunk - 1) / chunk;
+    std::vector<RasterRegion> regions(std::size_t(columns) * rows);
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < columns; ++col) {
+            regions[row * columns + col].clip = {col * chunk, row * chunk,
+                                                std::min((col + 1) * chunk, width),
+                                                std::min((row + 1) * chunk, height)};
+        }
+    }
+    const auto add_to_regions = [&](Rect bounds, const auto& add) {
+        if (regions.size() == 1) {
+            add(regions.front());
+            return;
+        }
+        const int left = std::max(0, bounds.left);
+        const int right = std::min(width, bounds.right);
+        const int top = std::max(0, bounds.top);
+        const int bottom = std::min(height, bounds.bottom);
+        if (left >= right || top >= bottom) return;
+        for (int row = top / chunk; row <= (bottom - 1) / chunk; ++row) {
+            for (int col = left / chunk; col <= (right - 1) / chunk; ++col) {
+                add(regions[row * columns + col]);
+            }
+        }
+    };
+
+    // Project the visible scene once. Each region receives its own subset in
+    // painter order, including any part of a sprite that crosses a tile seam.
+    const int hw = projection.half_width;
+    const int hh = projection.half_height;
+    const int terrain_detail = scaled_px(13, projection) + 1;
     const Rect cells = visible_cells(world.map, projection, width, height);
     for (int sum = cells.left + cells.top; sum < cells.right + cells.bottom - 1; ++sum) {
         const int left = std::max(cells.left, sum - cells.bottom + 1);
         const int right = std::min(cells.right - 1, sum - cells.top);
-        for (int x = left; x <= right; ++x) draw_terrain(canvas, world.map, projection, {x, sum - x});
+        for (int x = left; x <= right; ++x) {
+            const Cell cell{x, sum - x};
+            const auto center = projection.project(world.map, cell);
+            if (!visible(viewport, center, hw + 8)) continue;
+            const auto& tile = world.map.at(cell);
+            const int rise = tile.height ? scaled_px(elevation_step * tile.height, projection) : 0;
+            const int top = (tile.terrain == Terrain::Rock || tile.terrain == Terrain::Deposit) ?
+                std::max(hh, terrain_detail) : hh;
+            add_to_regions({center.x - hw, center.y - top, center.x + hw + 1, center.y + hh + rise + 1},
+                           [&](RasterRegion& region) { region.terrain.push_back({cell, center}); });
+        }
     }
+    PixelPoint preview{};
+    const auto tint = overlay.can_build ? color(129, 232, 162) : color(247, 121, 106);
     if (overlay.build_cell && world.map.contains(*overlay.build_cell)) {
-        const auto point = projection.project(world.map, *overlay.build_cell);
-        const auto tint = overlay.can_build ? color(129, 232, 162) : color(247, 121, 106);
-        canvas.rhombus_outline(point, projection.half_width - 1, projection.half_height - 1, tint);
+        preview = projection.project(world.map, *overlay.build_cell);
+        add_to_regions({preview.x - hw, preview.y - hh, preview.x + hw + 1, preview.y + hh + 1},
+                       [](RasterRegion& region) { region.preview = true; });
     }
 
-    struct Sprite {
-        const Entity* entity;
-        PixelPoint foot;
-    };
-    std::vector<Sprite> sprites;
+    std::vector<EntitySprite> sprites;
     sprites.reserve(world.entities.size());
+    const auto& selected = world.side(overlay.side).selected;
     for (const auto& entity : world.entities) {
         if (!entity.hp || !world.map.contains(entity.position) || entity.kind >= UnitKind::Count) continue;
         const auto foot = projection.project(world.map, entity.position);
-        if (canvas.visible(foot, 72)) sprites.push_back({&entity, foot});
+        if (visible(viewport, foot, 72)) {
+            sprites.push_back({&entity, foot, std::binary_search(selected.begin(), selected.end(), entity.id)});
+        }
     }
-    std::sort(sprites.begin(), sprites.end(), [](const Sprite& a, const Sprite& b) {
+    std::sort(sprites.begin(), sprites.end(), [](const EntitySprite& a, const EntitySprite& b) {
         if (a.foot.y != b.foot.y) return a.foot.y < b.foot.y;
         return a.entity->id < b.entity->id;
     });
-    const auto& selected = world.side(overlay.side).selected;
-    for (const Sprite& sprite : sprites) {
-        draw_entity(canvas, world, projection, *sprite.entity, sprite.foot,
-                    std::binary_search(selected.begin(), selected.end(), sprite.entity->id));
+    // Include outlines, roof detail, a dropped shadow, and the health bar.
+    const int sprite_side = scaled_px(18, projection) + 3;
+    const int sprite_top = scaled_px(30, projection) + 2;
+    const int sprite_bottom = scaled_px(12, projection) + 2;
+    for (const auto& sprite : sprites) {
+        const auto foot = sprite.foot;
+        add_to_regions({foot.x - sprite_side, foot.y - sprite_top,
+                        foot.x + sprite_side + 1, foot.y + sprite_bottom + 1},
+                       [&](RasterRegion& region) { region.entities.push_back(sprite); });
     }
-    draw_projectiles(canvas, world, projection);
+    for (const auto& projectile : world.projectiles) {
+        const auto center = projectile_center(world.map, projection, projectile);
+        if (center) {
+            add_to_regions({center->x - 2, center->y - 2, center->x + 3, center->y + 3},
+                           [&](RasterRegion& region) { region.projectiles.push_back(*center); });
+        }
+    }
+
+    const auto paint = [&](unsigned, std::size_t begin, std::size_t end) {
+        for (std::size_t index = begin; index < end; ++index) {
+            const auto& region = regions[index];
+            Canvas canvas(rgba, width, region.clip);
+            canvas.rect(region.clip, background);
+            for (const auto& tile : region.terrain) {
+                draw_terrain(canvas, world.map, projection, tile.cell, tile.center);
+            }
+            if (region.preview) canvas.rhombus_outline(preview, hw - 1, hh - 1, tint);
+            for (const auto& sprite : region.entities) {
+                draw_entity(canvas, world, projection, *sprite.entity, sprite.foot, sprite.selected);
+            }
+            for (const auto center : region.projectiles) canvas.diamond(center, 2, 2, resource_gold);
+        }
+    };
+    if (workers && regions.size() > 1) workers->run(regions.size(), paint);
+    else paint(0, 0, regions.size());
+
+    // Overlay the minimap and drag box after all pixel regions have joined.
+    Canvas canvas(rgba, width, viewport);
     draw_minimap(canvas, world, projection, width, height);
     if (overlay.drag) draw_drag(canvas, *overlay.drag, width, height);
     return true;
