@@ -19,6 +19,10 @@ auto entity_position(const std::vector<Entity>& entities, EntityId id) noexcept 
 }  // namespace
 
 const Entity* World::find(EntityId id) const noexcept {
+    if (!entities.empty() && id >= entities.front().id) {
+        const auto index = std::size_t(id - entities.front().id);
+        if (index < entities.size() && entities[index].id == id) return &entities[index];
+    }
     const auto found = entity_position(entities, id);
     return found == entities.end() || found->id != id ? nullptr : &*found;
 }

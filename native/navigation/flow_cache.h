@@ -13,6 +13,7 @@ namespace coastal::navigation {
 // no configure/set_grid/set_active/sample/prepare call may overlap that read.
 class FlowCache {
 public:
+    static constexpr std::size_t default_distance_budget = 256U * 1024U * 1024U;
     using Handle = int; // The goal cell itself, not a recyclable slot index.
     struct Field {
         Handle goal = -1;
@@ -37,6 +38,10 @@ public:
         std::size_t inactive_distance_bytes = 0;
         std::size_t inactive_budget_bytes = 0;
         std::size_t peak_resident_distance_bytes = 0;
+        std::size_t distance_budget_bytes = 0;
+        // Includes distance arrays reserved for builds and atomic repairs.
+        std::size_t peak_total_distance_bytes = 0;
+        std::size_t uncached_active_goals = 0;
         std::uint64_t fields_built = 0;
         std::uint64_t cache_hits = 0;
         std::uint64_t evictions = 0;
@@ -48,8 +53,10 @@ public:
         unsigned last_repair_threads = 1;
     };
 
-    explicit FlowCache(std::size_t inactive_budget_bytes = 8U*1024U*1024U,
-                       std::size_t maximum_active_references = 2200);
+    // The total distance budget must hold at least one field for the chosen map.
+    explicit FlowCache(std::size_t inactive_budget_bytes = 8U * 1024U * 1024U,
+                       std::size_t maximum_active_references = 2200,
+                       std::size_t distance_budget_bytes = default_distance_budget);
     FlowCache(const FlowCache&) = delete;
     FlowCache& operator=(const FlowCache&) = delete;
     FlowCache(FlowCache&&) noexcept = default;
@@ -65,12 +72,16 @@ public:
     bool set_active(const std::vector<Handle>& references, std::string& error);
     // Missing active fields build independently (caller + at most 3 workers).
     // Join first, then publish in stable goal order; cache/LRU stays sequential.
+    // If all cached active fields already fill the cap, unmaterialized handles
+    // remain active and find() can return null. Use sample() for exact queries.
     bool prepare_active(std::string& error, unsigned parallel_threads = 4);
     const Field* find(Handle handle) const noexcept;
     std::size_t reference_count(Handle handle) const noexcept;
 
     // Host-only exact query, including unpinned goals and zero cache budget.
     // Copies values before a temporary field is freed; no dangling view.
+    // A cold lookup can evict the oldest active field once inactive entries are
+    // exhausted. Active references and serialized metadata survive eviction.
     bool sample(Handle handle, const std::vector<int>& cells,
                 std::vector<std::int32_t>& result, std::string& error);
     void set_inactive_budget(std::size_t bytes);
@@ -89,6 +100,7 @@ private:
     struct Entry {
         Field field;
         bool inactive = false;
+        std::uint64_t generation = 0;
         std::list<Handle>::iterator lru;
     };
     int width_ = 0;
@@ -101,10 +113,13 @@ private:
     std::list<Handle> inactive_lru_;
     std::size_t inactive_budget_;
     std::size_t maximum_active_references_;
+    std::size_t distance_budget_;
     std::size_t active_reference_count_ = 0;
     std::size_t resident_bytes_ = 0;
     std::size_t inactive_bytes_ = 0;
     std::size_t peak_bytes_ = 0;
+    std::size_t peak_total_bytes_ = 0;
+    std::uint64_t generation_ = 0;
     std::uint64_t builds_ = 0;
     std::uint64_t hits_ = 0;
     std::uint64_t evictions_ = 0;
@@ -119,6 +134,10 @@ private:
                              std::uint32_t revision, Handle goal);
     static std::size_t bytes(const Field& field) noexcept;
     void insert(Field field);
+    std::size_t field_bytes() const noexcept;
+    void record_reserved(std::size_t extra) noexcept;
+    void evict_inactive();
+    void evict_oldest_active();
     void trim_inactive();
     void touch(Entry& entry);
 };

@@ -15,6 +15,8 @@ struct LaunchOptions {
     std::string skirmish_map;
     bool strict_audit = false;
     bool help = false;
+    bool stress = false;
+    unsigned threads = 1;
 };
 
 // Arguments exclude argv[0]. An omitted directory or map is represented by an empty value.

@@ -3,8 +3,8 @@
 #include "flow_repair.h"
 #include <algorithm>
 #include <exception>
-#include <functional>
-#include <queue>
+#include <iterator>
+#include <tuple>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -24,16 +24,21 @@ bool valid_grid(int width, int height, const std::vector<unsigned char>& grid,
 }
 }
 
-FlowCache::FlowCache(std::size_t budget, std::size_t maximum_refs)
-    : inactive_budget_(budget), maximum_active_references_(maximum_refs) {}
+FlowCache::FlowCache(std::size_t budget, std::size_t maximum_refs, std::size_t distance_budget)
+    : inactive_budget_(budget), maximum_active_references_(maximum_refs),
+      distance_budget_(distance_budget) {}
 
 bool FlowCache::configure(int width, int height,
                           const std::vector<unsigned char>& grid,
                           std::uint32_t revision, std::string& error) {
     error.clear();
     if (!valid_grid(width,height,grid,error)) return false;
+    if (grid.size() > distance_budget_ / sizeof(std::int32_t)) {
+        error = "flow distance budget cannot hold one field for this grid";
+        return false;
+    }
     try {
-        FlowCache candidate(inactive_budget_,maximum_active_references_);
+        FlowCache candidate(inactive_budget_, maximum_active_references_, distance_budget_);
         candidate.width_=width; candidate.height_=height;
         candidate.grid_=grid; candidate.revision_=revision;
         candidate.references_.assign(grid.size(),0);
@@ -63,7 +68,9 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
         auto replacement=grid; // Complete allocation before invalidation.
         std::vector<int> changed;
         for (std::size_t i=0;i<grid.size();++i) if (grid[i]!=grid_[i]) changed.push_back(int(i));
-        if (!fields_.empty() && changed.size()<=64) {
+        // Repair retains old arrays until every candidate is ready. Rebuild
+        // from the new topology when both generations would exceed the cap.
+        if (!fields_.empty() && changed.size() <= 64 && resident_bytes_ <= distance_budget_ - resident_bytes_) {
             std::vector<int> endpoints;
             for (int cell:changed) {
                 const int x=cell%width_,z=cell/width_;
@@ -80,6 +87,7 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
             std::vector<const Field*> originals;
             originals.reserve(goals.size());
             for (Handle goal:goals) originals.push_back(&fields_.at(goal).field);
+            record_reserved(resident_bytes_);
             std::vector<Field> candidates(goals.size());
             std::vector<detail::RepairWork> work(goals.size());
             const unsigned threads=goals.size()<4 || grid.size()*goals.size()<16384
@@ -122,6 +130,7 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
         grid_.swap(replacement); revision_=revision; ++invalidations_;
         fields_.clear(); inactive_lru_.clear();
         resident_bytes_=inactive_bytes_=0;
+        last_repair_threads_ = 1;
         // Stable handles and actual reference counts survive a grid revision.
         return true;
     } catch (const std::exception& exception) {
@@ -138,39 +147,67 @@ bool FlowCache::set_active(const std::vector<Handle>& references,
     error.clear();
     if (grid_.empty()) {error="flow grid is not configured"; return false;}
     try {
-        std::vector<std::size_t> counts(grid_.size(),0);
+        std::vector<Handle> sorted;
+        sorted.reserve(std::min(references.size(), maximum_active_references_));
+        for (Handle handle : references) {
+            if (handle == -1) continue;
+            if (handle_for_goal(handle) < 0 || sorted.size() >= maximum_active_references_) {
+                error = "active flow reference/limit is invalid";
+                return false;
+            }
+            sorted.push_back(handle);
+        }
+        std::sort(sorted.begin(), sorted.end());
         std::vector<Handle> goals;
-        std::size_t total=0;
-        for (Handle handle:references) {
-            if (handle==-1) continue;
-            if (handle_for_goal(handle)<0 || ++total>maximum_active_references_) {
-                error="active flow reference/limit is invalid"; return false;
+        std::vector<std::size_t> counts;
+        goals.reserve(sorted.size());
+        counts.reserve(sorted.size());
+        for (const auto handle : sorted) {
+            if (goals.empty() || goals.back() != handle) {
+                goals.push_back(handle);
+                counts.push_back(0);
             }
-            if (counts[handle]++==0) goals.push_back(handle);
+            ++counts.back();
         }
-        std::sort(goals.begin(),goals.end());
-        if (counts==references_) return true;
-        // Stage the entire LRU before changing pins. Invalid input or an
-        // allocation failure cannot partially release live field references.
+
+        if (goals == active_goals_) {
+            for (std::size_t i = 0; i < goals.size(); ++i) {
+                references_[goals[i]] = counts[i];
+            }
+            active_reference_count_ = sorted.size();
+            return true;
+        }
+
+        // Stage the LRU before changing the live references. Only the active
+        // handles are touched, even with a sparse 512-square map.
         std::list<Handle> new_lru;
-        std::size_t new_inactive_bytes=0;
-        for (Handle handle:inactive_lru_) if (counts[handle]==0) {
+        std::size_t new_inactive_bytes = 0;
+        const auto mark_inactive = [&](Handle handle) {
+            if (std::binary_search(goals.begin(), goals.end(), handle)) return;
+            auto found = fields_.find(handle);
+            if (found == fields_.end()) return;
             new_lru.push_back(handle);
-            new_inactive_bytes+=bytes(fields_.at(handle).field);
-        }
-        for (Handle handle:active_goals_) if (counts[handle]==0) {
-            auto found=fields_.find(handle);
-            if (found!=fields_.end()) {
-                new_lru.push_back(handle);
-                new_inactive_bytes+=bytes(found->second.field);
+            new_inactive_bytes += bytes(found->second.field);
+        };
+        for (Handle handle : inactive_lru_) mark_inactive(handle);
+        for (Handle handle : active_goals_) mark_inactive(handle);
+
+        for (Handle handle : active_goals_) references_[handle] = 0;
+        for (std::size_t i = 0; i < goals.size(); ++i) {
+            references_[goals[i]] = counts[i];
+            auto found = fields_.find(goals[i]);
+            if (found != fields_.end() && found->second.inactive) {
+                found->second.generation = ++generation_;
             }
         }
-        references_.swap(counts); active_goals_.swap(goals);
-        active_reference_count_=total;
-        inactive_lru_.swap(new_lru); inactive_bytes_=new_inactive_bytes;
-        for (auto& [handle,entry]:fields_) entry.inactive=references_[handle]==0;
-        for (auto it=inactive_lru_.begin();it!=inactive_lru_.end();++it)
-            fields_.at(*it).lru=it;
+        active_goals_.swap(goals);
+        active_reference_count_ = sorted.size();
+        inactive_lru_.swap(new_lru);
+        inactive_bytes_ = new_inactive_bytes;
+        for (auto& [handle, entry] : fields_) entry.inactive = references_[handle] == 0;
+        for (auto it = inactive_lru_.begin(); it != inactive_lru_.end(); ++it) {
+            fields_.at(*it).lru = it;
+        }
         trim_inactive();
         return true;
     } catch (const std::exception& exception) {
@@ -182,7 +219,7 @@ FlowCache::Field FlowCache::build_field(int width, int height,
                                       const std::vector<unsigned char>& grid,
                                       std::uint32_t revision, Handle goal) {
     Field result; result.goal=goal; result.map_revision=revision;
-    result.distance.assign(grid.size(),-1);
+    result.distance = std::vector<std::int32_t>(grid.size(), -1);
     if (grid[goal]) return result;
     detail::PackedMinHeap4 queue;
     result.distance[goal]=0; queue.emplace(0,goal);
@@ -207,11 +244,20 @@ std::size_t FlowCache::bytes(const Field& field) noexcept {
     return field.distance.capacity()*sizeof(std::int32_t);
 }
 
+std::size_t FlowCache::field_bytes() const noexcept {
+    return grid_.size() * sizeof(std::int32_t);
+}
+
+void FlowCache::record_reserved(std::size_t extra) noexcept {
+    peak_total_bytes_ = std::max(peak_total_bytes_, resident_bytes_ + extra);
+}
+
 void FlowCache::insert(Field field) {
     const Handle handle=field.goal;
     auto [it,created]=fields_.try_emplace(handle);
     if (!created) return;
     it->second.field=std::move(field);
+    it->second.generation = ++generation_;
     const auto field_bytes=bytes(it->second.field);
     if (references_[handle]==0) {
         try {inactive_lru_.push_back(handle);}
@@ -222,6 +268,7 @@ void FlowCache::insert(Field field) {
     }
     resident_bytes_+=field_bytes;
     peak_bytes_=std::max(peak_bytes_,resident_bytes_);
+    record_reserved(0);
     trim_inactive();
 }
 
@@ -234,7 +281,15 @@ bool FlowCache::prepare_active(std::string& error, unsigned requested_threads) {
             if (!find(handle)) missing.push_back(handle);
             else ++hits_;
         }
+        const auto bytes_per_field = field_bytes();
+        while (!inactive_lru_.empty() &&
+               missing.size() > (distance_budget_ - resident_bytes_) / bytes_per_field) {
+            evict_inactive();
+        }
+        missing.resize(std::min(missing.size(), (distance_budget_ - resident_bytes_) / bytes_per_field));
         if (missing.empty()) {last_prepare_threads_=1; return true;}
+
+        record_reserved(missing.size() * bytes_per_field);
         unsigned threads=std::min<unsigned>(4,std::max<unsigned>(1,requested_threads));
         threads=std::min<unsigned>(threads,unsigned(missing.size()));
         if (missing.size()<4 || grid_.size()*missing.size()<16384) threads=1;
@@ -278,6 +333,7 @@ std::size_t FlowCache::reference_count(Handle handle) const noexcept {
 }
 
 void FlowCache::touch(Entry& entry) {
+    entry.generation = ++generation_;
     if (entry.inactive) inactive_lru_.splice(inactive_lru_.end(),inactive_lru_,entry.lru);
 }
 
@@ -295,11 +351,16 @@ bool FlowCache::sample(Handle handle, const std::vector<int>& cells,
             ++hits_; touch(found->second);
             for (int cell:cells) values.push_back(found->second.field.distance[cell]);
         } else {
+            const auto needed = field_bytes();
+            while (needed > distance_budget_ - resident_bytes_) {
+                if (inactive_lru_.empty()) evict_oldest_active();
+                else evict_inactive();
+            }
+            record_reserved(needed);
             Field field=build_field(width_,height_,grid_,revision_,handle);
             ++builds_;
             for (int cell:cells) values.push_back(field.distance[cell]);
-            // With no inactive capacity, a cold diagnostic query is temporary;
-            // pinned routes always remain resident, independently of budget.
+            // With no inactive capacity a cold diagnostic query is temporary.
             if (reference_count(handle)>0 || bytes(field)<=inactive_budget_) insert(std::move(field));
         }
         result.swap(values);
@@ -309,14 +370,31 @@ bool FlowCache::sample(Handle handle, const std::vector<int>& cells,
     }
 }
 
+void FlowCache::evict_inactive() {
+    const Handle handle = inactive_lru_.front();
+    auto found = fields_.find(handle);
+    const auto field_cost = bytes(found->second.field);
+    inactive_bytes_ -= field_cost;
+    resident_bytes_ -= field_cost;
+    fields_.erase(found);
+    inactive_lru_.pop_front();
+    ++evictions_;
+}
+
+void FlowCache::evict_oldest_active() {
+    // Inactive entries are evicted first. A generation wraps only after
+    // 2^64 touches, and a tied generation always uses the same handle order.
+    const auto oldest = std::min_element(fields_.begin(), fields_.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.second.generation, a.first) < std::tie(b.second.generation, b.first);
+        });
+    resident_bytes_ -= bytes(oldest->second.field);
+    fields_.erase(oldest);
+    ++evictions_;
+}
+
 void FlowCache::trim_inactive() {
-    while (inactive_bytes_>inactive_budget_ && !inactive_lru_.empty()) {
-        const Handle handle=inactive_lru_.front();
-        auto found=fields_.find(handle);
-        const auto field_bytes=bytes(found->second.field);
-        inactive_bytes_-=field_bytes; resident_bytes_-=field_bytes;
-        fields_.erase(found); inactive_lru_.pop_front(); ++evictions_;
-    }
+    while (inactive_bytes_ > inactive_budget_) evict_inactive();
 }
 
 void FlowCache::set_inactive_budget(std::size_t budget) {
@@ -336,6 +414,9 @@ FlowCache::Stats FlowCache::stats() const noexcept {
     out.inactive_distance_bytes=inactive_bytes_;
     out.pinned_distance_bytes=resident_bytes_-inactive_bytes_;
     out.inactive_budget_bytes=inactive_budget_; out.peak_resident_distance_bytes=peak_bytes_;
+    out.distance_budget_bytes = distance_budget_;
+    out.peak_total_distance_bytes = peak_total_bytes_;
+    out.uncached_active_goals = out.active_goals - out.pinned_fields;
     out.fields_built=builds_; out.cache_hits=hits_; out.evictions=evictions_;
     out.grid_invalidations=invalidations_; out.last_prepare_threads=last_prepare_threads_;
     out.fields_repaired=repairs_;out.repair_cells_invalidated=repair_invalidated_;
@@ -355,7 +436,7 @@ bool FlowCache::restore_active(const Metadata& metadata,
                                std::string& error) {
     error.clear();
     if (metadata.version!=1) {error="flow metadata version is invalid"; return false;}
-    FlowCache candidate(inactive_budget_,maximum_active_references_);
+    FlowCache candidate(inactive_budget_, maximum_active_references_, distance_budget_);
     if (!candidate.configure(metadata.width,metadata.height,grid,metadata.map_revision,error)
         || !candidate.set_active(references,error)) return false;
     if (metadata.active_goals!=candidate.active_goals_) {

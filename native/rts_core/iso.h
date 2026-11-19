@@ -45,7 +45,9 @@ struct ViewOverlay {
     bool can_build = false;
 };
 
+class WorkerPool;
+
 bool render_isometric(const World& world, const Camera& camera, const ViewOverlay& overlay,
-                      std::span<std::uint8_t> rgba, int width, int height);
+                      std::span<std::uint8_t> rgba, int width, int height, WorkerPool* workers = nullptr);
 
 }  // namespace coastal::rts

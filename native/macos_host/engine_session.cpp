@@ -6,6 +6,7 @@
 #include "rts_core/iso.h"
 #include "rts_core/match.h"
 #include "rts_core/snapshot.h"
+#include "rts_core/stress.h"
 
 #include <algorithm>
 #include <cmath>
@@ -92,9 +93,15 @@ void scripted_rival(World& world) {
 class EngineSession final : public Session {
 public:
     EngineSession(World world, const LaunchOptions& options)
-        : world_(std::move(world)), save_path_(options.data_directory / "CoastalHost.snapshot"),
-          audit_(options.strict_audit) {
-        camera_.center_on(world_.map.starts[0], world_.map);
+        : world_(std::move(world)), navigator_(options.threads, options.strict_audit),
+          save_path_(options.data_directory / "CoastalHost.snapshot"),
+          threads_(options.threads), audit_(options.strict_audit), stress_(options.stress) {
+        if (stress_) {
+            camera_.zoom = .55;
+            camera_.center_on({world_.map.width / 2, world_.map.height / 2}, world_.map);
+        } else {
+            camera_.center_on(world_.map.starts[0], world_.map);
+        }
     }
 
     ~EngineSession() override {
@@ -104,6 +111,7 @@ public:
                   << ",\"blueDeliveries\":" << world_.side(player).deliveries
                   << ",\"copperDeliveries\":" << world_.side(rival).deliveries
                   << ",\"result\":" << static_cast<unsigned>(world_.result) << "}\n";
+        if (stress_) write_workload_metrics();
     }
 
     Viewport viewport() const noexcept override { return {width, height}; }
@@ -121,8 +129,11 @@ public:
 
     std::optional<Frame> advance_frame_into(std::span<std::uint8_t> rgba) override {
         if (rgba.size() != frame_size) return std::nullopt;
-        scripted_rival(world_);
+        if (stress_) drive_stress(world_);
+        else scripted_rival(world_);
+        const auto started = FrameClock::now();
         world_.tick(navigator_);
+        if (stress_ && audit_) sample_workload(started);
         advance_camera();
 
         ViewOverlay overlay;
@@ -131,7 +142,7 @@ public:
             overlay.build_cell = pick_cell(world_.map, camera_, *hover_, width, height);
             if (overlay.build_cell) overlay.can_build = can_build(world_, player, *build_kind_, *overlay.build_cell);
         }
-        if (!render_isometric(world_, camera_, overlay, rgba, width, height)) {
+        if (!render_isometric(world_, camera_, overlay, rgba, width, height, &navigator_.workers())) {
             throw std::runtime_error("Could not render the isometric world.");
         }
         return Frame{{frame_++, world_.entities.size(), false}, rgba};
@@ -158,7 +169,7 @@ public:
     void key_event(KeyEvent event) noexcept override {
         try {
             if (event.phase != KeyEvent::Phase::Down) return;
-            if (pan_key(event.key_code) || event.repeat) return;
+            if (pan_key(event.key_code) || event.repeat || stress_) return;
             if (event.key_code == 96 || event.key_code == 101) {
                 save_or_load(event.key_code == 96);
             } else if (event.characters_ignoring_modifiers.size() == 1) {
@@ -175,6 +186,30 @@ public:
     }
 
 private:
+    void sample_workload(FrameClock::time_point started) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(FrameClock::now() - started);
+        simulation_ns_ += static_cast<std::uint64_t>(elapsed.count());
+        const auto& work = navigator_.last_work();
+        minimum_units_ = std::min(minimum_units_, world_.entities.size());
+        minimum_active_ = std::min(minimum_active_, work.active);
+        moves_ += work.moved;
+        launches_ += work.fired;
+        if (work.moved && work.engaged) ++mixed_steps_;
+    }
+
+    void write_workload_metrics() const {
+        std::cout << "COASTAL_RTS_WORK {\"threads\":" << threads_
+                  << ",\"steps\":" << world_.step
+                  << ",\"minimumUnits\":" << minimum_units_
+                  << ",\"minimumActive\":" << minimum_active_
+                  << ",\"millionMoves\":" << double(moves_) / 1'000'000
+                  << ",\"projectilesLaunched\":" << launches_
+                  << ",\"stepsWithMovementAndCombat\":" << mixed_steps_
+                  << ",\"meanSimulationNs\":" << (world_.step ? simulation_ns_ / world_.step : 0)
+                  << ",\"peakFlowBytes\":" << navigator_.flow_stats().peak_total_distance_bytes
+                  << "}\n";
+    }
+
     void handle_pointer(PointerEvent event) {
         using Phase = PointerEvent::Phase;
         if (event.phase == Phase::Leave) {
@@ -185,6 +220,7 @@ private:
         if (!point) return;
         if (point->x >= 0 && point->x < width && point->y >= 0 && point->y < height) hover_ = point;
         else hover_.reset();
+        if (stress_) return;
 
         if (event.button == 1 && event.phase == Phase::Up) {
             if (build_kind_ || rally_mode_) {
@@ -336,7 +372,7 @@ private:
             return;
         }
         world_ = std::move(*loaded);
-        navigator_ = Navigator{};
+        navigator_ = Navigator(threads_, audit_);
         camera_.center_on(world_.map.starts[0], world_.map);
         build_kind_.reset();
         rally_mode_ = false;
@@ -347,7 +383,15 @@ private:
     Navigator navigator_;
     Camera camera_;
     std::filesystem::path save_path_;
+    unsigned threads_;
     bool audit_;
+    bool stress_;
+    std::size_t minimum_units_ = World::entity_limit;
+    unsigned minimum_active_ = World::entity_limit;
+    std::uint64_t simulation_ns_ = 0;
+    std::uint64_t moves_ = 0;
+    std::uint64_t launches_ = 0;
+    std::uint64_t mixed_steps_ = 0;
     std::optional<PixelPoint> hover_;
     std::optional<SelectionBox> drag_;
     std::optional<UnitKind> build_kind_;
@@ -359,6 +403,7 @@ private:
 }  // namespace
 
 std::unique_ptr<Session> create_session(const LaunchOptions& options, std::string& error) {
+    if (options.stress) return std::make_unique<EngineSession>(make_stress_match(), options);
     auto world = open_match(options.data_directory,
                             options.skirmish_map.empty() ? "Basin.map" : options.skirmish_map, error);
     if (!world) return nullptr;
