@@ -217,6 +217,8 @@ private:
         const auto& work = navigator_.last_work();
         minimum_units_ = std::min(minimum_units_, world_.entities.size());
         minimum_active_ = std::min(minimum_active_, work.active);
+        minimum_moved_ = std::min(minimum_moved_, work.moved);
+        minimum_fired_ = std::min(minimum_fired_, work.fired);
         moves_ += work.moved;
         launches_ += work.fired;
         if (work.moved && work.engaged) ++mixed_steps_;
@@ -227,6 +229,8 @@ private:
                   << ",\"steps\":" << world_.step
                   << ",\"minimumUnits\":" << minimum_units_
                   << ",\"minimumActive\":" << minimum_active_
+                  << ",\"minimumMoved\":" << minimum_moved_
+                  << ",\"minimumFired\":" << minimum_fired_
                   << ",\"millionMoves\":" << double(moves_) / 1'000'000
                   << ",\"projectilesLaunched\":" << launches_
                   << ",\"stepsWithMovementAndCombat\":" << mixed_steps_
@@ -458,6 +462,8 @@ private:
     std::size_t minimum_visible_ = World::entity_limit;
     std::size_t minimum_units_ = World::entity_limit;
     unsigned minimum_active_ = World::entity_limit;
+    unsigned minimum_moved_ = World::entity_limit;
+    unsigned minimum_fired_ = World::entity_limit;
     std::uint64_t simulation_ns_ = 0;
     std::uint64_t moves_ = 0;
     std::uint64_t launches_ = 0;

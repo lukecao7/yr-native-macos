@@ -23,7 +23,7 @@ using Clock = std::chrono::steady_clock;
 
 constexpr std::uint64_t hash_seed = 14695981039346656037ULL;
 constexpr unsigned expected_units = 1'200;
-constexpr unsigned minimum_active = 600;
+constexpr unsigned minimum_each_activity = 600;
 constexpr unsigned checkpoint_every = 60;
 
 struct Options {
@@ -102,6 +102,7 @@ struct Result {
     unsigned min_active = std::numeric_limits<unsigned>::max();
     unsigned min_moved = std::numeric_limits<unsigned>::max();
     unsigned min_engaged = std::numeric_limits<unsigned>::max();
+    unsigned min_fired = std::numeric_limits<unsigned>::max();
     unsigned firing_steps = 0;
     std::uint64_t total_fired = 0;
     std::uint64_t total_moves = 0;
@@ -129,6 +130,7 @@ Result run(unsigned threads, unsigned steps) {
         result.min_active = std::min(result.min_active, work.active);
         result.min_moved = std::min(result.min_moved, work.moved);
         result.min_engaged = std::min(result.min_engaged, work.engaged);
+        result.min_fired = std::min(result.min_fired, work.fired);
         result.total_moves += work.moved;
         result.total_fired += work.fired;
         result.firing_steps += work.fired > 0;
@@ -159,6 +161,7 @@ void print(const Result& result) {
               << ",\"minActive\":" << result.min_active
               << ",\"minMoved\":" << result.min_moved
               << ",\"minEngaged\":" << result.min_engaged
+              << ",\"minFired\":" << result.min_fired
               << ",\"firingSteps\":" << result.firing_steps
               << ",\"totalFired\":" << result.total_fired
               << ",\"totalMoves\":" << result.total_moves
@@ -196,8 +199,10 @@ int main(int argc, char** argv) {
             results.push_back(run(threads, settings.steps));
             const auto& result = results.back();
             print(result);
-            workload_ok &= result.min_units == expected_units && result.min_active >= minimum_active &&
-                           result.min_moved > 0 && result.firing_steps == settings.steps;
+            workload_ok &= result.min_units == expected_units && result.min_active == expected_units &&
+                           result.min_moved >= minimum_each_activity &&
+                           result.min_engaged >= minimum_each_activity &&
+                           result.min_fired >= minimum_each_activity;
         }
 
         const auto single_lane = std::find_if(results.begin(), results.end(), [](const Result& result) {
