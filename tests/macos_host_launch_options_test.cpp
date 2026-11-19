@@ -85,6 +85,10 @@ void test_launch_options() {
     expect_invalid({"--threads=1", "--threads=4"}, "Duplicate worker count");
     expect_invalid({"--stress", "--skirmish-map=Basin.map"}, "Stress fixture has a fixed map");
     expect_invalid({"--stress", "--stress"}, "Duplicate stress flag");
+    auto adaptive = parse({"--adaptive-ai", "--threads=4"}, error);
+    expect(adaptive && adaptive->adaptive_ai && adaptive->threads == 4, "Adaptive rival");
+    expect_invalid({"--adaptive-ai", "--stress"}, "Stress retains its fixed script");
+    expect_invalid({"--adaptive-ai", "--adaptive-ai"}, "Duplicate AI flag");
 
     expect_invalid({"--data-dir"}, "Missing data directory argument");
     expect_invalid({"--data-dir", "--strict-audit"}, "A flag cannot be taken as the directory");

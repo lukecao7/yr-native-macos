@@ -158,6 +158,110 @@ void check_codec(const Rules& rules) {
     reject(corrupt, "The decoder rejects extra records before a valid checksum.");
 }
 
+void replace_u32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value) {
+    for (std::size_t i = 0; i < sizeof(value); ++i) {
+        bytes.at(offset + i) = static_cast<std::uint8_t>(value >> (i * 8));
+    }
+}
+
+void check_ai_codec(const Rules& rules) {
+    auto world = rich_world(rules);
+    const auto retired = world.next_id - 1;
+    const auto first = world.spawn(UnitKind::Skirmisher, Side::Blue, {5, 0});
+    const auto second = world.spawn(UnitKind::Sentinel, Side::Blue, {0, 0});
+    require(first && second, "Spawn two actors for saved focus records.");
+    world.find(*first)->order = OrderKind::AttackMove;
+    world.find(*second)->order = OrderKind::AttackMove;
+    const auto legacy = encode_snapshot(world);
+    constexpr std::size_t checksum_size = sizeof(std::uint64_t);
+    const std::size_t extension = legacy.size() - checksum_size;
+
+    world.find(*first)->focus = 2; // A living hostile.
+    world.find(*second)->focus = retired;
+    auto& memory = world.side(Side::Blue).ai.emplace();
+    memory.chart.resize(world.map.tiles.size());
+    memory.chart[world.map.index({3, 1})] = {true, Terrain::Deposit, 19};
+    memory.chart[world.map.index({0, 2})] = {true, Terrain::Water, 0};
+    memory.enemies = {
+        {2, UnitKind::Pioneer, {5, 4}, 21, world.step - 40},
+        {retired, UnitKind::Artillery, {1, 4}, 4, world.step - 600},
+    };
+    memory.scout_target = {5, 3};
+    memory.expansion = {4, 1};
+    memory.survey_index = 0x01020304;
+    memory.preference = UnitKind::Sentinel;
+    world.side(Side::Copper).ai.emplace().survey_index = 24;
+
+    const auto bytes = encode_snapshot(world);
+    require(legacy[4] == 1 && bytes[4] == 2 && bytes[5] == 0 &&
+                std::ranges::equal(std::span(bytes).subspan(6, extension - 6),
+                                   std::span(legacy).subspan(6, extension - 6)),
+            "V2 extends the V1 body without changing the base records.");
+
+    std::string error;
+    auto restored = decode_snapshot(bytes, error);
+    require(restored.has_value() && error.empty(), "Decode a match with retained AI state.");
+    const auto* restored_first = restored->find(*first);
+    const auto* restored_second = restored->find(*second);
+    require(restored_first && restored_second && restored_first->focus == 2 &&
+                restored_second->focus == retired,
+            "Restore focus for living actors and allow a retired target ID.");
+    require(restored->side(Side::Blue).ai && restored->side(Side::Copper).ai,
+            "Restore both optional AI memory records.");
+    const auto& restored_memory = *restored->side(Side::Blue).ai;
+    require(restored_memory.chart.size() == memory.chart.size(), "Restore the chart size.");
+    const auto& remembered_mine = restored_memory.chart[restored->map.index({3, 1})];
+    require(remembered_mine.known && remembered_mine.terrain == Terrain::Deposit &&
+                remembered_mine.resource == 19 && restored->map.at({3, 1}).resource == 123 &&
+                !restored_memory.chart.front().known &&
+                restored_memory.enemies.size() == 2 && restored_memory.enemies.front().position == Cell{5, 4} &&
+                restored_memory.enemies.back().seen_at == world.step - 600 &&
+                restored_memory.scout_target == Cell{5, 3} && restored_memory.expansion == Cell{4, 1} &&
+                restored_memory.survey_index == 0x01020304 &&
+                restored_memory.preference == UnitKind::Sentinel &&
+                restored->side(Side::Copper).ai->chart.empty() &&
+                restored->side(Side::Copper).ai->survey_index == 24 &&
+                encode_snapshot(*restored) == bytes,
+            "Restore both factions, stale contacts and terrain, and exact V2 bytes.");
+
+    const auto reject_u32 = [&](std::size_t offset, std::uint32_t value, const char* description) {
+        auto corrupt = bytes;
+        replace_u32(corrupt, offset, value);
+        recompute_checksum(corrupt);
+        require(!decode_snapshot(corrupt, error) && !error.empty(), description);
+    };
+    constexpr auto uint_bytes = sizeof(std::uint32_t);
+    constexpr auto id_bytes = sizeof(EntityId);
+    const auto first_owner = extension + uint_bytes;
+    const auto first_target = first_owner + id_bytes;
+    const auto second_owner = first_owner + 2 * id_bytes;
+    const auto first_memory = first_owner + 4 * id_bytes;
+    // Presence, two Cells, survey_index, and preference precede the chart count.
+    const auto chart_count = first_memory + 1 + 4 * sizeof(std::int32_t) + uint_bytes + 1;
+    const auto contact_count = chart_count + uint_bytes + 4 * memory.chart.size();
+    reject_u32(extension, World::entity_limit + 1, "Bound the number of focus records.");
+    reject_u32(first_owner, retired, "A retired actor cannot own a focus record.");
+    reject_u32(first_target, *second, "A living ally cannot be the target of a saved focus.");
+    reject_u32(second_owner, *first, "Reject duplicate focus owners.");
+    reject_u32(chart_count, 1, "Reject a partial AI chart.");
+    reject_u32(contact_count, World::entity_limit + 1, "Bound retained contacts.");
+    reject_u32(contact_count + uint_bytes, *first, "Reject a living ally as a remembered enemy.");
+
+    auto corrupt = bytes;
+    corrupt[chart_count + uint_bytes] = 2;
+    recompute_checksum(corrupt);
+    require(!decode_snapshot(corrupt, error) && !error.empty(), "Reject invalid AI tile visibility.");
+
+    const TemporaryDirectory temp;
+    const auto path = temp.path / "ai.save";
+    require(save_world(path, world, error) && error.empty(), "Atomically write V2.");
+    memory.enemies[0].seen_at = world.step + 1;
+    require(!save_world(path, world, error) && !error.empty(), "Reject a future enemy observation.");
+    restored = load_world(path, error);
+    require(restored && error.empty() && encode_snapshot(*restored) == bytes,
+            "Rejected V2 replacement preserves the previous save.");
+}
+
 void check_atomic_save(const Rules& rules) {
     const TemporaryDirectory temp;
     const auto save = temp.path / "test.save";
@@ -237,9 +341,10 @@ int main(int argc, char** argv) {
         const auto rules = load_rules(path, error);
         if (!rules) throw std::runtime_error(error);
         check_codec(*rules);
+        check_ai_codec(*rules);
         check_atomic_save(*rules);
         check_replay(*rules);
-        std::cout << "RTS snapshot tests passed (canonical bytes, malformed saves, atomic replace, replay)\n";
+        std::cout << "RTS snapshot tests passed (V1 and V2 authority, malformed saves, atomic replace, replay)\n";
     } catch (const std::exception& error) {
         std::cerr << "rts_snapshot_test: " << error.what() << '\n';
         return 1;

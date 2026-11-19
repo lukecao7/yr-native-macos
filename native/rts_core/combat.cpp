@@ -201,7 +201,12 @@ Intent plan_unit(const World& world, const FlowGrid& grid, const SpatialIndex& s
     if (spec.damage && unit.order != OrderKind::Move && unit.order != OrderKind::Gather) {
         const bool pursues = unit.order == OrderKind::AttackMove && spec.move_period;
         const int radius = pursues ? spec.vision : std::min(spec.vision, spec.range);
-        if (const auto* target = spatial.nearest_enemy(world, unit, radius)) {
+        const auto* focused = unit.focus ? world.find(unit.focus) : nullptr;
+        if (focused && (focused->side == unit.side || grid_distance(unit.position, focused->position) > radius)) {
+            focused = nullptr;
+        }
+        const auto* target = focused ? focused : spatial.nearest_enemy(world, unit, radius);
+        if (target) {
             if (grid_distance(unit.position, target->position) <= spec.range) {
                 intent.engaged = true;
                 if (!unit.shot_wait) {
@@ -306,6 +311,7 @@ void commit_intents(World& world, const std::vector<Intent>& intents,
         if (intent.finish_move) {
             unit.order = OrderKind::Idle;
             unit.destination = {};
+            unit.focus = no_entity;
             continue;
         }
         for (std::size_t candidate = 0; candidate < intent.moves.count; ++candidate) {
@@ -414,6 +420,10 @@ bool apply_combat(World& world, const Command& command) {
     if (!hold && !world.map.walkable(command.target)) return false;
     const OrderKind order = hold ? OrderKind::Hold :
         (command.kind == CommandKind::Move ? OrderKind::Move : OrderKind::AttackMove);
+    if (command.focus != no_entity) {
+        const auto* target = world.find(command.focus);
+        if (order != OrderKind::AttackMove || !target || target->side == command.side) return false;
+    }
     const auto ids = owned_ids(world, command.side, command.units.empty() ? side.selected : command.units);
     bool changed = false;
     for (const EntityId id : ids) {
@@ -421,6 +431,7 @@ bool apply_combat(World& world, const Command& command) {
         if (!world.rules.spec(unit.kind).move_period) continue;
         unit.order = order;
         unit.destination = hold ? Cell{} : command.target;
+        unit.focus = world.rules.spec(unit.kind).damage ? command.focus : no_entity;
         changed = true;
     }
     return changed;

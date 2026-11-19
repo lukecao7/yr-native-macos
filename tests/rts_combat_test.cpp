@@ -188,6 +188,31 @@ void shot_flight_armor_and_retirement() {
             "Hold fires from its own cell and destroyed units retire from groups and projectiles");
 }
 
+void explicit_focus_uses_hostile_target() {
+    auto world = open_world();
+    Navigator navigator;
+    const auto attacker = spawn(world, UnitKind::Skirmisher, Side::Blue, {2, 3});
+    const auto friendly = spawn(world, UnitKind::Pioneer, Side::Blue, {2, 4});
+    const auto nearest = spawn(world, UnitKind::Pioneer, Side::Copper, {3, 3});
+    const auto focus = spawn(world, UnitKind::Pioneer, Side::Copper, {6, 3});
+    auto attack = make_command(CommandKind::AttackMove);
+    attack.units = {attacker};
+    attack.target = {6, 3};
+    attack.focus = friendly;
+    require(!world.apply(attack) && world.find(attacker)->order == OrderKind::Idle,
+            "An invalid friendly focus leaves the command unapplied");
+    attack.focus = focus;
+    require(world.apply(attack), "The attack order can focus a known opposing unit");
+    world.tick(navigator);
+    require(world.projectiles.size() == 1 && world.projectiles.front().target == focus &&
+            world.projectiles.front().target != nearest, "The engine fires at the specified target");
+    auto move = make_command(CommandKind::Move);
+    move.units = {attacker};
+    move.target = {2, 2};
+    require(world.apply(move) && world.find(attacker)->focus == no_entity,
+            "An ordinary movement replaces the focus order");
+}
+
 }  // namespace
 
 int main() {
@@ -195,5 +220,6 @@ int main() {
     movement_detour_and_gather();
     group_approaches_shared_goal();
     shot_flight_armor_and_retirement();
+    explicit_focus_uses_hostile_target();
     std::cout << "RTS combat tests passed (orders, paths, grouping, flight, armor, retirement)\n";
 }

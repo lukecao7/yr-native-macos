@@ -317,7 +317,7 @@ int main(int argc, char** argv) {
             auto options = host::parse_launch_options(arguments, error);
             if (!options) return startup_error(error);
             if (options->help) {
-                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress]\n";
+                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress] [--adaptive-ai]\n";
                 return 0;
             }
 

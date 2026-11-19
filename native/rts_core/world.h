@@ -100,6 +100,7 @@ struct Entity {
     EntityId depot = no_entity;
     std::uint16_t cargo = 0;
     std::uint16_t work = 0;
+    EntityId focus = no_entity;
 };
 
 struct Projectile {
@@ -118,6 +119,30 @@ struct Production {
     std::uint32_t remaining_work; // Hundredths of a fully powered simulation step.
 };
 
+struct SeenTile {
+    bool known = false;
+    Terrain terrain = Terrain::Ground;
+    std::uint16_t resource = 0;
+};
+
+struct EnemyContact {
+    EntityId id = no_entity;
+    UnitKind kind = UnitKind::Pioneer;
+    Cell position;
+    std::uint16_t hp = 0;
+    std::uint64_t seen_at = 0;
+};
+
+struct AiMemory {
+    static constexpr std::uint64_t contact_lifetime = 480;
+    std::vector<SeenTile> chart;
+    std::vector<EnemyContact> enemies; // Increasing entity IDs.
+    Cell scout_target;
+    Cell expansion;
+    std::uint32_t survey_index = 0;
+    UnitKind preference = UnitKind::Count;
+};
+
 struct SideState {
     static constexpr std::size_t queue_limit = 64;
     std::uint64_t funds = 0;
@@ -129,6 +154,7 @@ struct SideState {
     std::vector<Production> queue;
     std::vector<EntityId> selected;
     std::array<std::vector<EntityId>, 9> groups;
+    std::optional<AiMemory> ai;
 };
 
 enum class MatchResult : std::uint8_t { Running, BlueWon, CopperWon, Draw };
@@ -145,6 +171,7 @@ struct Command {
     std::uint32_t index = 0; // Group (zero-based) or queue entry.
     std::vector<EntityId> units;
     bool add = false;
+    EntityId focus = no_entity; // Optional enemy focus for an attack-move command.
 };
 
 class Navigator;

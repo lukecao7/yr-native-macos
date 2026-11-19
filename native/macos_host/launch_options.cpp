@@ -49,9 +49,11 @@ std::optional<LaunchOptions> parse_launch_options(
             threads_set = true;
             continue;
         }
-        if (argument == "--strict-audit" || argument == "--help" || argument == "--stress") {
+        if (argument == "--strict-audit" || argument == "--help" || argument == "--stress" ||
+            argument == "--adaptive-ai") {
             bool& enabled = argument == "--strict-audit" ? options.strict_audit :
-                            argument == "--help" ? options.help : options.stress;
+                            argument == "--help" ? options.help :
+                            argument == "--stress" ? options.stress : options.adaptive_ai;
             if (enabled) {
                 error = "Specify " + std::string(argument) + " once.";
                 return std::nullopt;
@@ -95,6 +97,10 @@ std::optional<LaunchOptions> parse_launch_options(
     }
     if (options.stress && !options.skirmish_map.empty()) {
         error = "--stress uses its own map.";
+        return std::nullopt;
+    }
+    if (options.stress && options.adaptive_ai) {
+        error = "--adaptive-ai is for skirmishes.";
         return std::nullopt;
     }
     return options;
