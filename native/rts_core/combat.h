@@ -30,6 +30,14 @@ public:
 
     // Owner-thread entry points retained for path queries and focused tests.
     void prepare(const World& world);
+    // Copies a row-major Map-sized overlay; any nonzero byte adds a blocker.
+    // An empty span removes the overlay, preserving terrain/building blockers.
+    // The setter only stages it: prepare(world) validates the size and makes
+    // changes visible to next(). World::tick prepares before its path queries.
+    // After a bad-size rejection, replace/clear the mask and prepare again.
+    void set_obstacle_mask(std::span<const std::uint8_t>);
+    // Queries the last prepared grid. A masked goal without a world entity
+    // can be approached, but its Move order waits until the mask is cleared.
     std::optional<Cell> next(const World& world, Cell from, Cell goal);
 
 private:
@@ -37,6 +45,7 @@ private:
     navigation::FlowCache cache_;
     std::vector<unsigned char> blocked_;
     std::vector<unsigned char> edges_;
+    std::vector<std::uint8_t> obstacle_mask_;
     int width_ = 0;
     int height_ = 0;
     std::uint32_t revision_ = 0;

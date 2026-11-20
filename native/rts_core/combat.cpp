@@ -335,12 +335,18 @@ Navigator::Navigator(unsigned threads, bool measure)
     profile_.set_enabled(measure);
 }
 
+void Navigator::set_obstacle_mask(std::span<const std::uint8_t> mask) {
+    if(mask.size()==obstacle_mask_.size()&&std::equal(mask.begin(),mask.end(),obstacle_mask_.begin()))return;
+    obstacle_mask_.assign(mask.begin(),mask.end());
+}
+
 void Navigator::prepare(const World& world) {
     const Map& map = world.map;
     if (map.width <= 0 || map.height <= 0 ||
         map.width > Map::max_dimension || map.height > Map::max_dimension ||
         map.tiles.size() != std::size_t(map.width) * map.height ||
-        (!map.travel_edges.empty() && map.travel_edges.size()!=map.tiles.size())) {
+        (!map.travel_edges.empty() && map.travel_edges.size()!=map.tiles.size()) ||
+        (!obstacle_mask_.empty() && obstacle_mask_.size()!=map.tiles.size())) {
         throw std::invalid_argument("The navigation map does not match its dimensions.");
     }
 
@@ -360,6 +366,8 @@ void Navigator::prepare(const World& world) {
             std::transform(row, row + map.width, blocked.begin() + y * flow_width, impassable);
         }
     }
+    if(!obstacle_mask_.empty())for(int y=0;y<map.height;++y)for(int x=0;x<map.width;++x)
+        if(obstacle_mask_[y*map.width+x])blocked[y*flow_width+x]=1;
     for (const Entity& unit : world.entities) {
         if (unit.hp && is_building(unit.kind)) {
             blocked[unit.position.y * flow_width + unit.position.x] = 1;
