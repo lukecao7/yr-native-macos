@@ -8,7 +8,7 @@ rts_3d_sources := camera scene terrain
 rts_3d_obj := $(rts_obj)/view3d
 rts_headers += $(wildcard native/rts_ai/*.h) $(wildcard native/rts_3d/*.h)
 rts_lib := build/libcoastal_rts.a
-rts_tests := $(addprefix $(rts_obj)/,isometric_test economy_test combat_test snapshot_test topology_test match_test worker_pool_test spatial_index_test ai_scout_test ai_industry_test ai_tactics_test terrain3d_test camera3d_test scene3d_test)
+rts_tests := $(addprefix $(rts_obj)/,isometric_test economy_test combat_test snapshot_test topology_test obstacle_mask_test match_test worker_pool_test spatial_index_test ai_scout_test ai_industry_test ai_tactics_test terrain3d_test camera3d_test scene3d_test)
 
 .PHONY: rts-test
 rts-test: $(rts_tests) $(rts_obj)/fixture.stamp
