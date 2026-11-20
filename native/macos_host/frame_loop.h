@@ -27,8 +27,11 @@ struct Percentiles {
 
 struct FrameMetrics {
     std::uint64_t presented_frames = 0;
+    // Complete original commits across menu/match transitions. Invalid input
+    // still invalidates this count; diagnostic frames never contribute to it.
     std::uint64_t full_original_frames = 0;
     std::optional<std::uint64_t> active_objects;
+    std::optional<std::uint64_t> last_original_active_objects;
     std::optional<std::chrono::nanoseconds> first_present;
     std::optional<Percentiles> frame_work;
     std::optional<Percentiles> presentation_interval;

@@ -42,7 +42,13 @@ void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = 
               << ",\"displayed3dFrames\":" << (metal ? metal->displayed_scene_frames : 0)
               << ",\"displayedModeSwitches\":" << (metal ? metal->mode_switches : 0)
               << ",\"maxSwitchIntervalNs\":" << (metal ? metal->max_switch_interval.count() : 0)
-              << ",\"fullOriginalFrames\":" << metrics.full_original_frames
+              << ",\"fullOriginalFrames\":" << (metal ? metal->displayed_original_frames : metrics.full_original_frames)
+              << ",\"submittedFullOriginalFrames\":" << metrics.full_original_frames
+              << ",\"lastOriginalActiveObjects\":";
+    const auto original_objects = metal ? metal->last_original_active_objects : metrics.last_original_active_objects;
+    if (original_objects) std::cout << *original_objects;
+    else std::cout << "null";
+    std::cout
               << ",\"activeObjects\":";
     if (metrics.active_objects) std::cout << *metrics.active_objects;
     else std::cout << "null";

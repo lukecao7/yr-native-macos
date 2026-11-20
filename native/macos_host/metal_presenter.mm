@@ -87,12 +87,19 @@ std::optional<host::Percentiles> summarize_intervals(std::vector<std::chrono::na
 // Callbacks retain this history independently of the window and presenter.
 class PresentationHistory {
 public:
-    void record(CFTimeInterval displayed_at, bool scene) {
+    void record(CFTimeInterval displayed_at, bool scene, host::FrameCommit commit) {
         if (displayed_at <= 0 || !std::isfinite(displayed_at)) return;
         const std::lock_guard lock(mutex_);
         times_[count_ % times_.size()] = {displayed_at, scene};
         ++count_;
         if (scene) ++scene_count_;
+        if (commit.full_original_frame) {
+            ++original_count_;
+            if (displayed_at > last_original_time_) {
+                last_original_time_ = displayed_at;
+                last_original_objects_ = commit.active_objects;
+            }
+        }
     }
 
     host::MetalMetrics metrics() const {
@@ -101,6 +108,8 @@ public:
         {
             const std::lock_guard lock(mutex_);
             result.displayed_frames = count_;
+            result.displayed_original_frames = original_count_;
+            result.last_original_active_objects = last_original_objects_;
             result.displayed_scene_frames = scene_count_;
             const auto size = std::min<std::uint64_t>(count_, times_.size());
             times.assign(times_.begin(), times_.begin() + size);
@@ -135,6 +144,9 @@ private:
     mutable std::mutex mutex_;
     std::array<PresentedFrame, presentation_samples> times_{};
     std::uint64_t count_ = 0;
+    std::uint64_t original_count_ = 0;
+    CFTimeInterval last_original_time_ = 0;
+    std::optional<std::uint64_t> last_original_objects_;
     std::uint64_t scene_count_ = 0;
 };
 
@@ -274,8 +286,9 @@ private:
 
     if (@available(macOS 10.15.4, *)) {
         const auto history = _history;
+        const auto commit = frame.commit;
         [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
-            history->record(shown.presentedTime, scene);
+            history->record(shown.presentedTime, scene, commit);
         }];
     }
     [command presentDrawable:drawable];
