@@ -36,6 +36,7 @@ private:
     friend void tick_combat(World& world, Navigator& navigator);
     navigation::FlowCache cache_;
     std::vector<unsigned char> blocked_;
+    std::vector<unsigned char> edges_;
     int width_ = 0;
     int height_ = 0;
     std::uint32_t revision_ = 0;

@@ -141,6 +141,7 @@ MoveChoices rank_moves(const FlowGrid& grid, Cell from, const RouteTargets& targ
     std::size_t count = 1;
     navigation::detail::for_flow_neighbour(grid.width, grid.height, grid.blocked, cells[0],
         [&](int neighbour, std::int32_t edge) {
+            if (!grid.map.travel_edges.empty() && !grid.map.can_travel(from,grid.cell(neighbour))) return;
             if (occupied(grid.cell(neighbour))) return;
             cells[count] = neighbour;
             edge_costs[count] = edge;
@@ -338,7 +339,8 @@ void Navigator::prepare(const World& world) {
     const Map& map = world.map;
     if (map.width <= 0 || map.height <= 0 ||
         map.width > Map::max_dimension || map.height > Map::max_dimension ||
-        map.tiles.size() != std::size_t(map.width) * map.height) {
+        map.tiles.size() != std::size_t(map.width) * map.height ||
+        (!map.travel_edges.empty() && map.travel_edges.size()!=map.tiles.size())) {
         throw std::invalid_argument("The navigation map does not match its dimensions.");
     }
 
@@ -364,17 +366,24 @@ void Navigator::prepare(const World& world) {
         }
     }
 
+    std::vector<unsigned char> edges;
+    if (!map.travel_edges.empty()) {
+        edges.assign(blocked.size(),0);
+        for (int y=0;y<map.height;++y)
+            std::copy_n(map.travel_edges.begin()+y*map.width,map.width,edges.begin()+y*flow_width);
+    }
     const bool size_changed = width_ != map.width || height_ != map.height;
-    if (!size_changed && blocked == blocked_) return;
+    if (!size_changed && blocked == blocked_ && edges==edges_) return;
     std::string error;
     const auto revision = revision_ + 1;
-    const bool updated = size_changed ? cache_.configure(flow_width, flow_height, blocked, revision, error)
-                                      : cache_.set_grid(blocked, revision, error);
+    const bool updated = size_changed ? cache_.configure(flow_width, flow_height, blocked, revision, error,edges)
+                                      : cache_.set_grid(blocked, revision, error,edges);
     if (!updated) throw std::runtime_error(error);
     width_ = map.width;
     height_ = map.height;
     revision_ = revision;
     blocked_ = std::move(blocked);
+    edges_ = std::move(edges);
 }
 
 std::optional<Cell> Navigator::next(const World& world, Cell from, Cell goal) {

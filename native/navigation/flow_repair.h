@@ -11,18 +11,31 @@ struct RepairWork {
     std::uint64_t relaxed = 0;
 };
 
+inline bool flow_edge_open(int width, const std::vector<unsigned char>& edges, int from, int to) {
+    if (edges.empty()) return true;
+    const int raw = (to/width-from/width+1)*3 + to%width-from%width+1;
+    const int bit = raw < 4 ? raw : raw-1;
+    return (edges[from] & (1U << bit)) && (edges[to] & (1U << (7-bit)));
+}
+
 // An edge is undirected. Diagonals require both cardinal side cells, exactly
 // as the original full-field Dijkstra; no corner cutting is introduced.
 template<class Visit>
 inline void for_flow_neighbour(int width, int height,
                                const std::vector<unsigned char>& grid,
-                               int cell, Visit&& visit) {
+                               int cell, Visit&& visit,
+                               const std::vector<unsigned char>& edges = {}) {
     if (grid[cell]) return;
     const int x=cell%width,z=cell/width;
     for (int dz=-1;dz<=1;++dz) for (int dx=-1;dx<=1;++dx) {
         if ((!dx&&!dz)||x+dx<0||x+dx>=width||z+dz<0||z+dz>=height) continue;
         const int next=(z+dz)*width+x+dx;
         if (grid[next]||(dx&&dz&&(grid[z*width+x+dx]||grid[(z+dz)*width+x]))) continue;
+        if (!flow_edge_open(width,edges,cell,next)) continue;
+        if (dx&&dz && (!flow_edge_open(width,edges,cell,z*width+x+dx) ||
+                      !flow_edge_open(width,edges,cell,(z+dz)*width+x) ||
+                      !flow_edge_open(width,edges,next,z*width+x+dx) ||
+                      !flow_edge_open(width,edges,next,(z+dz)*width+x))) continue;
         visit(next,std::int32_t((dx&&dz)?1414:1000));
     }
 }
