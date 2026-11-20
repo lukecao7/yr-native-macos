@@ -152,26 +152,34 @@ void require_valid_frame_sequence() {
            "Reject a regressing injected clock");
 }
 
-void require_complete_metadata_from_index_zero() {
+void count_complete_frames_across_menu_transitions() {
     Fixture fixture;
     // These flags are unit-test inputs for the counting rule.
-    expect(fixture.loop.tick([] { return FrameCommit{0, 3, true}; }) == FrameTick::Presented &&
-               fixture.loop.metrics().full_original_frames == 1,
-           "Count a complete frame at index zero");
+    expect(fixture.loop.tick([] { return FrameCommit{0, 0, false}; }) == FrameTick::Presented &&
+               fixture.loop.metrics().full_original_frames == 0 &&
+               !fixture.loop.metrics().last_original_active_objects,
+           "The main menu has no original frames or original objects");
     fixture.time += 10ms;
-    expect(fixture.loop.tick([] { return FrameCommit{1, 4, true}; }) == FrameTick::Presented &&
+    expect(fixture.loop.tick([] { return FrameCommit{1, 3, true}; }) == FrameTick::Presented &&
+               fixture.loop.metrics().full_original_frames == 1,
+           "Count a complete match frame after the main menu");
+    fixture.time += 10ms;
+    expect(fixture.loop.tick([] { return FrameCommit{2, 4, true}; }) == FrameTick::Presented &&
                fixture.loop.metrics().full_original_frames == 2,
            "Count consecutive complete metadata");
 
     fixture.time += 10ms;
-    expect(fixture.loop.tick([] { return FrameCommit{2, 9}; }) == FrameTick::Presented &&
-               fixture.loop.metrics().full_original_frames == 0,
-           "A diagnostic frame invalidates the complete sequence");
+    expect(fixture.loop.tick([] { return FrameCommit{3, 0}; }) == FrameTick::Presented &&
+               fixture.loop.metrics().full_original_frames == 2 &&
+               fixture.loop.metrics().active_objects == 0 &&
+               fixture.loop.metrics().last_original_active_objects == 4,
+           "Returning to a menu preserves match totals and distinguishes current object count");
     fixture.time += 10ms;
-    expect(fixture.loop.tick([] { return FrameCommit{3, 5, true}; }) == FrameTick::Presented &&
-               fixture.loop.metrics().full_original_frames == 0 &&
-               fixture.loop.metrics().presented_frames == 4,
-           "Later complete metadata cannot revive a mixed sequence");
+    expect(fixture.loop.tick([] { return FrameCommit{4, 5, true}; }) == FrameTick::Presented &&
+               fixture.loop.metrics().full_original_frames == 3 &&
+               fixture.loop.metrics().last_original_active_objects == 5 &&
+               fixture.loop.metrics().presented_frames == 5,
+           "A restarted match contributes only its own complete frames");
 
     Fixture invalid;
     expect(invalid.loop.tick([] { return FrameCommit{0, 3, true}; }) == FrameTick::Presented,
@@ -248,7 +256,7 @@ int main() {
         continuously_submit_diagnostic_frames();
         skip_waiting_and_late_slots();
         require_valid_frame_sequence();
-        require_complete_metadata_from_index_zero();
+        count_complete_frames_across_menu_transitions();
         retain_a_bounded_timing_window();
         check_stop_during_dispatch();
         check_platform_process_rss();

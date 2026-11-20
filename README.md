@@ -46,7 +46,7 @@ make
 
 以下命令用自制档案启动测试窗口。左键拖动绘制选框，Shift、Ctrl、Cmd 会改变边框颜色。右键清除选框并移动色块，空格切换色块颜色，滚轮平移，Ctrl 加滚轮缩放，指针靠近窗口边缘时平移。按 Cmd+Q 或关闭窗口退出。
 
-支持共享帧缓冲的运行时可直接向 Metal 共享内存绘制。宿主在 Metal 无法初始化时回退到 Core Graphics。退出时终端会记录显示帧数、提交帧数、帧间隔分位数和峰值内存。Metal 显示帧间隔来自系统的 drawable 呈现回调。
+支持共享帧缓冲的运行时可直接向 Metal 共享内存绘制。宿主在 Metal 无法初始化时回退到 Core Graphics。退出时终端会记录显示帧数、提交帧数、帧间隔分位数和峰值内存。Metal 显示帧间隔来自系统的 drawable 呈现回调。 `fullOriginalFrames` 也只累计系统实际显示、且由运行时标为完整原版画面的帧；菜单和暂停画面不计入，换局不清零。`submittedFullOriginalFrames` 单独记录提交数量。`activeObjects` 是当前画面的对象数，`lastOriginalActiveObjects` 保留最后一帧原版画面的对象数，返回大厅后可据此区分两种口径。
 
 ```sh
 make macos-host-fixture

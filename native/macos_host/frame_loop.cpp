@@ -110,11 +110,11 @@ FrameTick FrameLoop::tick(const Step& step) {
                   frame_index, sample_limit_);
     last_present_ = finished;
 
-    // The live count describes a sequence of complete frames from index zero.
-    if (commit->full_original_frame && metrics_.full_original_frames == frame_index) {
+    // Menu and pause frames share the host sequence with live match frames.
+    // Count only complete original frames without erasing earlier matches.
+    if (commit->full_original_frame) {
         ++metrics_.full_original_frames;
-    } else {
-        metrics_.full_original_frames = 0;
+        metrics_.last_original_active_objects = commit->active_objects;
     }
     ++metrics_.presented_frames;
     metrics_.active_objects = commit->active_objects;

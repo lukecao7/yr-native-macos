@@ -9,6 +9,8 @@ namespace coastal::macos_host {
 
 struct MetalMetrics {
     std::uint64_t displayed_frames = 0;
+    std::uint64_t displayed_original_frames = 0;
+    std::optional<std::uint64_t> last_original_active_objects;
     std::uint64_t displayed_scene_frames = 0;
     std::size_t mode_switches = 0;
     std::optional<Percentiles> display_interval;
