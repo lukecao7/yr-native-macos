@@ -24,6 +24,7 @@ namespace {
 constexpr std::array<std::uint8_t, 4> signature{'C', 'R', 'T', 'S'};
 constexpr std::uint16_t legacy_version = 1;
 constexpr std::uint16_t ai_version = 2;
+constexpr std::uint16_t topology_version = 3;
 constexpr std::size_t snapshot_limit = 16 * 1024 * 1024;
 constexpr std::size_t tile_bytes = 4;
 constexpr std::size_t production_bytes = 7;
@@ -203,7 +204,7 @@ void write_extensions(Writer& writer, const World& world, std::uint32_t focus_co
     }
 }
 
-void read_extensions(Reader& reader, World& world) {
+void read_extensions(Reader& reader, World& world, bool allow_empty = false) {
     const auto focus_count = reader.count(world.entities.size(), focus_bytes);
     auto actor = world.entities.begin();
     for (std::size_t i = 0; i < focus_count; ++i) {
@@ -233,7 +234,7 @@ void read_extensions(Reader& reader, World& world) {
         memory.enemies.resize(reader.count(World::entity_limit, contact_bytes));
         for (auto& contact : memory.enemies) contact_fields(reader, contact);
     }
-    if (focus_count == 0 && !world.sides[0].ai && !world.sides[1].ai) {
+    if (!allow_empty && focus_count == 0 && !world.sides[0].ai && !world.sides[1].ai) {
         throw std::invalid_argument("Save has an empty AI extension.");
     }
 }
@@ -302,7 +303,8 @@ void check_ai_memory(const World& world, Side side, const AiMemory& memory) {
 void check_world(const World& world) {
     const auto& map = world.map;
     if (!dimensions_valid(map.width, map.height) ||
-        map.tiles.size() != static_cast<std::size_t>(map.width) * map.height) {
+        map.tiles.size() != static_cast<std::size_t>(map.width) * map.height ||
+        (!map.travel_edges.empty() && map.travel_edges.size()!=map.tiles.size())) {
         throw std::invalid_argument("Invalid map dimensions in save.");
     }
     for (const auto& tile : map.tiles) {
@@ -424,7 +426,8 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
     const auto focus_count = static_cast<std::uint32_t>(std::ranges::count_if(
         world.entities, [](const Entity& entity) { return entity.focus != no_entity; }));
     const bool has_extension = focus_count != 0 || world.sides[0].ai || world.sides[1].ai;
-    writer(has_extension ? ai_version : legacy_version);
+    const bool has_topology = !world.map.travel_edges.empty();
+    writer(has_topology ? topology_version : has_extension ? ai_version : legacy_version);
     world_fields(writer, world);
     writer(static_cast<std::uint16_t>(world.map.width), static_cast<std::uint16_t>(world.map.height));
     for (const Cell start : world.map.starts) cell_fields(writer, start);
@@ -441,7 +444,11 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
     for (const Entity& entity : world.entities) entity_fields(writer, entity);
     writer.count(world.projectiles);
     for (const Projectile& projectile : world.projectiles) projectile_fields(writer, projectile);
-    if (has_extension) write_extensions(writer, world, focus_count);
+    if (has_extension || has_topology) write_extensions(writer, world, focus_count);
+    if (has_topology) {
+        writer.count(world.map.travel_edges);
+        for (auto edge:world.map.travel_edges) writer(edge);
+    }
     writer(checksum(writer.bytes));
     return std::move(writer.bytes);
 }
@@ -466,7 +473,7 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         Reader reader(body.subspan(signature.size()));
         std::uint16_t version;
         reader(version);
-        if (version != legacy_version && version != ai_version) {
+        if (version != legacy_version && version != ai_version && version != topology_version) {
             throw std::invalid_argument("Unsupported save version.");
         }
 
@@ -496,7 +503,13 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         for (Entity& entity : world.entities) entity_fields(reader, entity);
         world.projectiles.resize(reader.count(World::projectile_limit, projectile_bytes));
         for (Projectile& projectile : world.projectiles) projectile_fields(reader, projectile);
-        if (version == ai_version) read_extensions(reader, world);
+        if (version >= ai_version) read_extensions(reader, world, version == topology_version);
+        if (version == topology_version) {
+            const auto count=reader.count(area,1);
+            if (count!=area) throw std::invalid_argument("Save topology does not match its map.");
+            world.map.travel_edges.resize(count);
+            for (auto& edge:world.map.travel_edges) reader(edge);
+        }
         if (!reader.empty()) throw std::invalid_argument("Unexpected bytes at the end of the save.");
         check_world(world);
         return world;

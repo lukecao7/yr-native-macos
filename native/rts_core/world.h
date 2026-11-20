@@ -28,6 +28,9 @@ struct Map {
     int height = 0;
     std::vector<Tile> tiles;
     std::array<Cell, 2> starts;
+    // Optional imported adjacency: NW,N,NE,W,E,SW,S,SE. Empty permits
+    // ordinary ground adjacency; both endpoint bits must admit an edge.
+    std::vector<std::uint8_t> travel_edges;
 
     bool contains(Cell cell) const noexcept {
         return cell.x >= 0 && cell.x < width && cell.y >= 0 && cell.y < height;
@@ -38,6 +41,25 @@ struct Map {
     Tile& at(Cell cell) noexcept { return tiles[index(cell)]; }
     bool walkable(Cell cell) const noexcept {
         return contains(cell) && at(cell).terrain != Terrain::Water && at(cell).terrain != Terrain::Rock;
+    }
+    bool can_travel(Cell from, Cell to) const noexcept {
+        if (!walkable(from) || !walkable(to)) return false;
+        const int dx = to.x - from.x, dy = to.y - from.y;
+        if ((!dx && !dy) || dx < -1 || dx > 1 || dy < -1 || dy > 1) return false;
+        if (!travel_edges.empty() && travel_edges.size() != tiles.size()) return false;
+        const auto open = [&](Cell a, Cell b) {
+            if (travel_edges.empty()) return true;
+            const int raw = (b.y-a.y+1)*3 + b.x-a.x+1;
+            const int bit = raw < 4 ? raw : raw-1;
+            return (travel_edges[index(a)] & (1U << bit)) &&
+                   (travel_edges[index(b)] & (1U << (7-bit)));
+        };
+        if (!open(from, to)) return false;
+        if (dx && dy) {
+            const Cell x{from.x+dx,from.y}, y{from.x,from.y+dy};
+            return walkable(x) && walkable(y) && open(from,x) && open(from,y) && open(to,x) && open(to,y);
+        }
+        return true;
     }
 };
 

@@ -30,9 +30,13 @@ FlowCache::FlowCache(std::size_t budget, std::size_t maximum_refs, std::size_t d
 
 bool FlowCache::configure(int width, int height,
                           const std::vector<unsigned char>& grid,
-                          std::uint32_t revision, std::string& error) {
+                          std::uint32_t revision, std::string& error,
+                          const std::vector<unsigned char>& edges) {
     error.clear();
     if (!valid_grid(width,height,grid,error)) return false;
+    if (!edges.empty() && edges.size()!=grid.size()) {
+        error="flow adjacency does not match its grid"; return false;
+    }
     if (grid.size() > distance_budget_ / sizeof(std::int32_t)) {
         error = "flow distance budget cannot hold one field for this grid";
         return false;
@@ -41,6 +45,7 @@ bool FlowCache::configure(int width, int height,
         FlowCache candidate(inactive_budget_, maximum_active_references_, distance_budget_);
         candidate.width_=width; candidate.height_=height;
         candidate.grid_=grid; candidate.revision_=revision;
+        candidate.edges_=edges;
         candidate.references_.assign(grid.size(),0);
         *this=std::move(candidate);
         return true;
@@ -50,10 +55,14 @@ bool FlowCache::configure(int width, int height,
 }
 
 bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
-                         std::uint32_t revision, std::string& error) {
+                         std::uint32_t revision, std::string& error,
+                         const std::vector<unsigned char>& edges) {
     error.clear();
     if (!valid_grid(width_,height_,grid,error)) return false;
-    if (grid==grid_) {
+    if (!edges.empty() && edges.size()!=grid.size()) {
+        error="flow adjacency does not match its grid"; return false;
+    }
+    if (grid==grid_ && edges==edges_) {
         // An obstacle list may change without changing any blocked cell.
         // Distances are still exact; update the diagnostic revision only.
         if (revision_!=revision) {
@@ -66,11 +75,12 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
     }
     try {
         auto replacement=grid; // Complete allocation before invalidation.
+        auto replacement_edges=edges;
         std::vector<int> changed;
         for (std::size_t i=0;i<grid.size();++i) if (grid[i]!=grid_[i]) changed.push_back(int(i));
         // Repair retains old arrays until every candidate is ready. Rebuild
         // from the new topology when both generations would exceed the cap.
-        if (!fields_.empty() && changed.size() <= 64 && resident_bytes_ <= distance_budget_ - resident_bytes_) {
+        if (edges.empty() && edges_.empty() && !fields_.empty() && changed.size() <= 64 && resident_bytes_ <= distance_budget_ - resident_bytes_) {
             std::vector<int> endpoints;
             for (int cell:changed) {
                 const int x=cell%width_,z=cell/width_;
@@ -127,7 +137,7 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
             peak_bytes_=std::max(peak_bytes_,resident_bytes_);last_repair_threads_=threads;
             return true;
         }
-        grid_.swap(replacement); revision_=revision; ++invalidations_;
+        grid_.swap(replacement); edges_.swap(replacement_edges); revision_=revision; ++invalidations_;
         fields_.clear(); inactive_lru_.clear();
         resident_bytes_=inactive_bytes_=0;
         last_repair_threads_ = 1;
@@ -217,25 +227,24 @@ bool FlowCache::set_active(const std::vector<Handle>& references,
 
 FlowCache::Field FlowCache::build_field(int width, int height,
                                       const std::vector<unsigned char>& grid,
-                                      std::uint32_t revision, Handle goal) {
+                                      std::uint32_t revision, Handle goal,
+                                      const std::vector<unsigned char>& edges) {
     Field result; result.goal=goal; result.map_revision=revision;
     result.distance = std::vector<std::int32_t>(grid.size(), -1);
     if (grid[goal]) return result;
     detail::PackedMinHeap4 queue;
     result.distance[goal]=0; queue.emplace(0,goal);
     while (!queue.empty()) {
-        const auto [distance,cell]=queue.top(); queue.pop();
+        const auto item=queue.top(); queue.pop();
+        const auto distance=item.first;
+        const auto cell=item.second;
         if (distance!=result.distance[cell]) continue;
-        const int x=cell%width,z=cell/width;
-        for (int dz=-1;dz<=1;++dz) for (int dx=-1;dx<=1;++dx) {
-            if ((!dx&&!dz)||x+dx<0||x+dx>=width||z+dz<0||z+dz>=height) continue;
-            const int next=(z+dz)*width+x+dx;
-            if (grid[next] || (dx&&dz&&(grid[z*width+x+dx]||grid[(z+dz)*width+x]))) continue;
-            const std::int32_t candidate=distance+((dx&&dz)?1414:1000);
+        detail::for_flow_neighbour(width,height,grid,cell,[&](int next,std::int32_t edge) {
+            const std::int32_t candidate=distance+edge;
             if (result.distance[next]<0 || candidate<result.distance[next]) {
                 result.distance[next]=candidate; queue.emplace(candidate,next);
             }
-        }
+        },edges);
     }
     return result;
 }
@@ -299,7 +308,7 @@ bool FlowCache::prepare_active(std::string& error, unsigned requested_threads) {
             try {
                 for (std::size_t i=missing.size()*worker/threads;
                      i<missing.size()*(worker+1)/threads;++i)
-                    built[i]=build_field(width_,height_,grid_,revision_,missing[i]);
+                    built[i]=build_field(width_,height_,grid_,revision_,missing[i],edges_);
             } catch (...) {failures[worker]=std::current_exception();}
         };
         std::vector<std::thread> workers;
@@ -357,7 +366,7 @@ bool FlowCache::sample(Handle handle, const std::vector<int>& cells,
                 else evict_inactive();
             }
             record_reserved(needed);
-            Field field=build_field(width_,height_,grid_,revision_,handle);
+            Field field=build_field(width_,height_,grid_,revision_,handle,edges_);
             ++builds_;
             for (int cell:cells) values.push_back(field.distance[cell]);
             // With no inactive capacity a cold diagnostic query is temporary.
@@ -433,11 +442,12 @@ FlowCache::Metadata FlowCache::export_active() const {
 bool FlowCache::restore_active(const Metadata& metadata,
                                const std::vector<unsigned char>& grid,
                                const std::vector<Handle>& references,
-                               std::string& error) {
+                               std::string& error,
+                               const std::vector<unsigned char>& edges) {
     error.clear();
     if (metadata.version!=1) {error="flow metadata version is invalid"; return false;}
     FlowCache candidate(inactive_budget_, maximum_active_references_, distance_budget_);
-    if (!candidate.configure(metadata.width,metadata.height,grid,metadata.map_revision,error)
+    if (!candidate.configure(metadata.width,metadata.height,grid,metadata.map_revision,error,edges)
         || !candidate.set_active(references,error)) return false;
     if (metadata.active_goals!=candidate.active_goals_) {
         error="flow metadata must exactly match the sorted unique live references"; return false;

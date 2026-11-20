@@ -61,10 +61,15 @@ public:
     FlowCache& operator=(const FlowCache&) = delete;
     FlowCache(FlowCache&&) noexcept = default;
     FlowCache& operator=(FlowCache&&) noexcept = default;
+    // Optional adjacency bits are NW,N,NE,W,E,SW,S,SE. Both endpoints
+    // must allow an edge. Diagonals also require all four cardinal edges.
+    // Empty edges retain the existing unrestricted-ground behavior.
     bool configure(int width, int height, const std::vector<unsigned char>& grid,
-                   std::uint32_t revision, std::string& error);
+                   std::uint32_t revision, std::string& error,
+                   const std::vector<unsigned char>& edges = {});
     bool set_grid(const std::vector<unsigned char>& grid,
-                  std::uint32_t revision, std::string& error);
+                  std::uint32_t revision, std::string& error,
+                  const std::vector<unsigned char>& edges = {});
     Handle handle_for_goal(int goal) const noexcept;
 
     // -1 means no route. Duplicates represent multiple users of one field.
@@ -94,7 +99,8 @@ public:
     bool restore_active(const Metadata& metadata,
                         const std::vector<unsigned char>& grid,
                         const std::vector<Handle>& actual_references,
-                        std::string& error);
+                        std::string& error,
+                        const std::vector<unsigned char>& edges = {});
 
 private:
     struct Entry {
@@ -107,6 +113,7 @@ private:
     int height_ = 0;
     std::uint32_t revision_ = 0;
     std::vector<unsigned char> grid_;
+    std::vector<unsigned char> edges_;
     std::vector<std::size_t> references_;
     std::vector<Handle> active_goals_;
     std::unordered_map<Handle, Entry> fields_;
@@ -131,7 +138,8 @@ private:
     unsigned last_repair_threads_ = 1;
     static Field build_field(int width, int height,
                              const std::vector<unsigned char>& grid,
-                             std::uint32_t revision, Handle goal);
+                             std::uint32_t revision, Handle goal,
+                             const std::vector<unsigned char>& edges);
     static std::size_t bytes(const Field& field) noexcept;
     void insert(Field field);
     std::size_t field_bytes() const noexcept;
