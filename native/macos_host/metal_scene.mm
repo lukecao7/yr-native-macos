@@ -15,7 +15,7 @@ namespace view = coastal::rts::view3d;
 namespace {
 
 constexpr MTLPixelFormat depth_format = MTLPixelFormatDepth32Float;
-constexpr std::size_t slot_count = 2;
+constexpr std::size_t slot_count = 3;
 constexpr std::size_t initial_instances = 2048;
 
 struct alignas(16) Uniforms {

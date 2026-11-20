@@ -18,7 +18,7 @@ namespace {
 
 constexpr MTLPixelFormat source_format = MTLPixelFormatRGBA8Unorm;
 constexpr MTLPixelFormat drawable_format = MTLPixelFormatBGRA8Unorm;
-constexpr std::size_t buffer_count = 2;
+constexpr std::size_t buffer_count = 3;
 // Covers a complete five-minute 60 Hz endurance check with a fixed memory bound.
 constexpr std::size_t presentation_samples = 32'769;
 constexpr std::uint32_t max_texture_dimension = 16384;
