@@ -2,6 +2,10 @@
 
 按北京时间记录实际工作的日期，最近的在前。收工时由维护者核对当天可公开的代码、测试和受影响的说明。每条日结列出已合并的 PR、验证结果，以及还有谁在做什么。跨日任务留在对应的 Issue 或草稿 PR，方便下一位贡献者接手。[开发路线图](ROADMAP.md) · [认领任务](CONTRIBUTING.md)
 
+## 2026-11-21
+
+**Metal 显示与 3D 场景改为三缓冲** `CAMetalLayer` 的 `maximumDrawableCount`、共享像素缓冲、命令队列容量与 3D 场景暂存槽从 `2` 调至 `3`，消除 `nextDrawable` 在显示扫描相位上的等待。公开套件 `make -j4 check test rts-test macos-host-test` 通过。Apple M2 真机签名窗口实测雪地原版地图 765 帧，`drawableAcquire` P95 从 14.06 ms 降至 0.041 ms，`frameWork` P95 从 16.83 ms 降至 4.82 ms，显示间隔 P50、P95 与 P99 均为 16.67 ms（此前雪地失败运行 P95 为 33.33 ms）；同机 1,200 单位 2D/3D 切换压测实显 780 个 3D 帧与 2 次切换，显示间隔和 3D 帧间隔 P50、P95、P99 及切换最大间隔均为 16.67 ms，`drawableAcquire` P95 为 0.064 ms，峰值 RSS 175.6 MiB。本轮实测未执行系统鼠标键盘交互验收，三阵营完整实机验收与剩余机制仍由维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 接续。 [PR #134](https://github.com/lukecao7/yr-native-macos/pull/134)
+
 ## 2026-11-20
 
 **本轮收工** 普通额度到零后停止工程开发，未使用付费额度。Y1、Y2 已通过既定验收；Y3 仅盟军城市核心科技、真实存档续跑与相关模块检查通过，三阵营完整实机验收仍未完成，Y4 尚未启动。维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 保留未完事项，等待明确恢复指令。
