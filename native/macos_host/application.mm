@@ -64,6 +64,10 @@ void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = 
     write_percentiles(metal ? metal->display_interval : metrics.presentation_interval);
     std::cout << ",\"display3dInterval\":";
     write_percentiles(metal ? metal->scene_interval : std::nullopt);
+    std::cout << ",\"drawableAcquire\":";
+    write_percentiles(metal ? metal->drawable_acquire : std::nullopt);
+    std::cout << ",\"encodeAndSubmit\":";
+    write_percentiles(metal ? metal->encode_submit : std::nullopt);
     std::cout << ",\"submissionInterval\":";
     write_percentiles(metrics.presentation_interval);
     std::cout << ",\"peakRssBytes\":";
@@ -96,7 +100,7 @@ void install_quit_menu(NSApplication* application) {
 
 @interface CoastalFrameView : CoastalInputView
 - (std::optional<host::Frame>)advanceFrame;
-- (BOOL)presentFrame:(const host::Frame&)frame;
+- (host::FramePresentation)presentFrame:(const host::Frame&)frame;
 - (std::optional<host::MetalMetrics>)finishPresentation;
 @end
 
@@ -148,16 +152,16 @@ void install_quit_menu(NSApplication* application) {
     return _session->advance_frame_into(pixels);
 }
 
-- (BOOL)presentFrame:(const host::Frame&)frame {
+- (host::FramePresentation)presentFrame:(const host::Frame&)frame {
     if (_metal) return [_metal presentFrame:frame];
     auto* image = host::create_rgba_frame_image(_viewport, frame, _colorSpace);
-    if (!image) return NO;
+    if (!image) return host::FramePresentation::Invalid;
     if (_image) CGImageRelease(_image);
     _image = image;
     _drewImage = NO;
     self.needsDisplay = YES;
     [self displayIfNeeded];
-    return _drewImage;
+    return _drewImage ? host::FramePresentation::Presented : host::FramePresentation::Invalid;
 }
 
 - (std::optional<host::MetalMetrics>)finishPresentation {
@@ -196,6 +200,7 @@ void install_quit_menu(NSApplication* application) {
 @implementation CoastalAppDelegate {
     host::Session* _session;
     std::unique_ptr<host::FrameLoop> _loop;
+    host::FrameDelivery _delivery;
     NSWindow* _window;
     CoastalFrameView* _surface;
     NSTimer* _timer;
@@ -256,11 +261,9 @@ void install_quit_menu(NSApplication* application) {
         try {
             const auto result = _loop->tick([self]() -> std::optional<host::FrameCommit> {
                 if (!_window.visible || _window.miniaturized) return std::nullopt;
-                const auto frame = [_surface advanceFrame];
-                if (!frame) return std::nullopt;
-                if (!_loop->accepts_frame(frame->commit)) return frame->commit;
-                if (![_surface presentFrame:*frame]) throw std::runtime_error("Could not present a session frame.");
-                return frame->commit;
+                return _delivery.step(*_loop,
+                    [self] { return [_surface advanceFrame]; },
+                    [self](const host::Frame& frame) { return [_surface presentFrame:frame]; });
             });
             if (_stopped) return;
             if (result == host::FrameTick::InvalidFrame) {
@@ -309,6 +312,7 @@ void install_quit_menu(NSApplication* application) {
     _timer = nil;
     _loop->stop();
     _window.delegate = nil;
+    _delivery.clear();
     [_window close];
     _window.contentView = nil;
     _surface = nil;

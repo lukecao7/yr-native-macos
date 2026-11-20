@@ -69,6 +69,16 @@ struct FrameBuffer {
     id<MTLCommandBuffer> submission = nil;
 };
 
+bool retire_submissions(std::array<FrameBuffer, buffer_count>& buffers) {
+    for (auto& buffer : buffers) {
+        if (!buffer.submission) continue;
+        const auto status = buffer.submission.status;
+        if (status == MTLCommandBufferStatusError) return false;
+        if (status == MTLCommandBufferStatusCompleted) buffer.submission = nil;
+    }
+    return true;
+}
+
 struct PresentedFrame {
     CFTimeInterval time = 0;
     bool scene = false;
@@ -87,6 +97,11 @@ std::optional<host::Percentiles> summarize_intervals(std::vector<std::chrono::na
 // Callbacks retain this history independently of the window and presenter.
 class PresentationHistory {
 public:
+    void record_work(std::size_t kind, host::FrameClock::time_point started) {
+        const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(host::FrameClock::now()-started);
+        const std::lock_guard lock(mutex_);
+        work_[kind][work_count_[kind]++ % presentation_samples]=elapsed;
+    }
     void record(CFTimeInterval displayed_at, bool scene, host::FrameCommit commit) {
         if (displayed_at <= 0 || !std::isfinite(displayed_at)) return;
         const std::lock_guard lock(mutex_);
@@ -105,6 +120,7 @@ public:
     host::MetalMetrics metrics() const {
         host::MetalMetrics result;
         std::vector<PresentedFrame> times;
+        std::array<std::vector<std::chrono::nanoseconds>,2> work;
         {
             const std::lock_guard lock(mutex_);
             result.displayed_frames = count_;
@@ -113,7 +129,13 @@ public:
             result.displayed_scene_frames = scene_count_;
             const auto size = std::min<std::uint64_t>(count_, times_.size());
             times.assign(times_.begin(), times_.begin() + size);
+            for(std::size_t kind=0;kind<work.size();++kind){
+                const auto count=std::min<std::uint64_t>(work_count_[kind],presentation_samples);
+                work[kind].assign(work_[kind].begin(),work_[kind].begin()+count);
+            }
         }
+        result.drawable_acquire=summarize_intervals(work[0]);
+        result.encode_submit=summarize_intervals(work[1]);
         if (times.size() < 2) return result;
 
         // Callback delivery order can differ from the actual display order.
@@ -148,13 +170,14 @@ private:
     CFTimeInterval last_original_time_ = 0;
     std::optional<std::uint64_t> last_original_objects_;
     std::uint64_t scene_count_ = 0;
+    std::array<std::array<std::chrono::nanoseconds,presentation_samples>,2> work_{};
+    std::array<std::uint64_t,2> work_count_{};
 };
 
 }  // namespace
 
 @implementation CoastalMetalPresenter {
     CAMetalLayer* _layer;
-    id<CAMetalDrawable> _drawable;
     id<MTLCommandQueue> _queue;
     id<MTLRenderPipelineState> _pipeline;
     CoastalMetalScene* _scene;
@@ -225,24 +248,14 @@ private:
 - (CAMetalLayer*)layer { return _layer; }
 
 - (std::span<std::uint8_t>)writablePixels {
-    _drawable = nil;
     if (_finished) return {};
 
-    for (auto& buffer : _buffers) {
-        if (!buffer.submission) continue;
-        const auto status = buffer.submission.status;
-        if (status == MTLCommandBufferStatusError) {
-            throw std::runtime_error("Metal frame execution failed.");
-        }
-        if (status == MTLCommandBufferStatusCompleted) buffer.submission = nil;
-    }
+    if (!retire_submissions(_buffers)) throw std::runtime_error("Metal frame execution failed.");
 
     for (std::size_t offset = 0; offset < buffer_count; ++offset) {
         const auto index = (_nextBuffer + offset) % buffer_count;
         auto& buffer = _buffers[index];
         if (buffer.submission) continue;
-        _drawable = [_layer nextDrawable];
-        if (!_drawable) return {};
         _writingBuffer = index;
         return {static_cast<std::uint8_t*>(buffer.pixels.contents), _byteCount};
     }
@@ -256,19 +269,24 @@ private:
     return YES;
 }
 
-- (BOOL)presentFrame:(const host::Frame&)frame {
-    id<CAMetalDrawable> drawable = _drawable;
-    _drawable = nil;
-    if (!drawable) return NO;
+- (host::FramePresentation)presentFrame:(const host::Frame&)frame {
+    if (_finished || !retire_submissions(_buffers)) return host::FramePresentation::Invalid;
     auto& buffer = _buffers[_writingBuffer];
     const bool scene = frame.scene != nullptr;
-    if (!scene && (frame.rgba.data() != buffer.pixels.contents || frame.rgba.size() != _byteCount)) return NO;
+    if (!scene && (frame.rgba.data() != buffer.pixels.contents || frame.rgba.size() != _byteCount)) return host::FramePresentation::Invalid;
+    // Finish CPU simulation/raster work before reserving a scarce display
+    // surface. The independent shared pixel slot needs no drawable.
+    const auto acquire_started=host::FrameClock::now();
+    id<CAMetalDrawable> drawable = [_layer nextDrawable];
+    _history->record_work(0,acquire_started);
+    if (!drawable) return host::FramePresentation::Unavailable;
+    const auto started=host::FrameClock::now();
 
     id<MTLCommandBuffer> command = [_queue commandBuffer];
-    if (!command) return NO;
+    if (!command) return host::FramePresentation::Invalid;
     if (scene) {
         if (!_scene || ![_scene encodeScene:*frame.scene target:drawable.texture command:command slot:_writingBuffer]) {
-            return NO;
+            return host::FramePresentation::Invalid;
         }
     } else {
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -277,7 +295,7 @@ private:
         color.loadAction = MTLLoadActionDontCare;
         color.storeAction = MTLStoreActionStore;
         id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-        if (!encoder) return NO;
+        if (!encoder) return host::FramePresentation::Invalid;
         [encoder setRenderPipelineState:_pipeline];
         [encoder setFragmentTexture:buffer.texture atIndex:0];
         [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -293,9 +311,10 @@ private:
     }
     [command presentDrawable:drawable];
     [command commit];
+    _history->record_work(1,started);
     buffer.submission = command;
     _nextBuffer = (_writingBuffer + 1) % buffer_count;
-    return YES;
+    return host::FramePresentation::Presented;
 }
 
 - (host::MetalMetrics)metrics {
@@ -304,7 +323,6 @@ private:
 
 - (void)finish {
     _finished = YES;
-    _drawable = nil;
     for (auto& buffer : _buffers) {
         [buffer.submission waitUntilCompleted];
         buffer.submission = nil;
