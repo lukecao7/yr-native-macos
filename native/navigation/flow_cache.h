@@ -75,7 +75,7 @@ public:
     // -1 means no route. Duplicates represent multiple users of one field.
     // A failed ref validation leaves the previous pins and cache untouched.
     bool set_active(const std::vector<Handle>& references, std::string& error);
-    // Missing active fields build independently (caller + at most 3 workers).
+    // Missing active fields build independently (caller + up to 7 workers).
     // Join first, then publish in stable goal order; cache/LRU stays sequential.
     // If all cached active fields already fill the cap, unmaterialized handles
     // remain active and find() can return null. Use sample() for exact queries.

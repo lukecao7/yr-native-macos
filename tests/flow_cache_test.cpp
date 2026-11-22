@@ -119,15 +119,21 @@ void run() {
         const int width=64,height=64;
         auto grid=map_grid(width,height);
         const std::size_t field_bytes=grid.size()*sizeof(std::int32_t);
-        FlowCache serial(field_bytes*2),parallel(field_bytes*2);
+        FlowCache serial(field_bytes*2),parallel(field_bytes*2),eight(field_bytes*2);
         require(serial.configure(width,height,grid,11,error),error);
         require(parallel.configure(width,height,grid,11,error),error);
+        require(eight.configure(width,height,grid,11,error),error);
         std::vector<int> references(1024);std::iota(references.begin(),references.end(),0);
         require(serial.set_active(references,error),error);require(parallel.set_active(references,error),error);
         require(serial.prepare_active(error,1),error);require(parallel.prepare_active(error,4),error);
+        require(eight.set_active(references,error),error);require(eight.prepare_active(error,8),error);
         bool identical=true;
         for(int goal:references)identical=identical&&serial.find(goal)->distance==parallel.find(goal)->distance;
         check("1024 independent full fields are bit-identical with one and four preparation threads",identical&&parallel.stats().last_prepare_threads==4);
+        bool eight_identical=true;
+        for(int goal:references)eight_identical=eight_identical&&serial.find(goal)->distance==eight.find(goal)->distance;
+        check("1024 independent full fields are bit-identical with one, four and eight preparation threads",
+              identical&&eight_identical&&eight.stats().last_prepare_threads==8);
         check("Active distance memory is explicitly reported above the inactive soft budget",parallel.stats().pinned_fields==1024&&parallel.stats().pinned_distance_bytes==1024*field_bytes&&parallel.stats().inactive_distance_bytes==0);
         const auto built=parallel.stats().fields_built;
         const auto* first=parallel.find(references.front());

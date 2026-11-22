@@ -1,6 +1,7 @@
 CXX ?= c++
 CPPFLAGS += -Inative
 CXXFLAGS += -std=c++20 -pthread
+navigation_flags ?= -O2 -fno-fast-math -frounding-math -ffp-contract=off
 AR ?= ar
 
 sources := native/navigation/flow_cache.cpp native/navigation/nearest_walkable.cpp native/navigation/reachability.cpp
@@ -15,8 +16,8 @@ all: build/libnavigation.a
 build:
 	mkdir -p $@
 
-build/%.o: native/navigation/%.cpp $(headers) | build
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+build/%.o: native/navigation/%.cpp $(headers) Makefile | build
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(navigation_flags) -c $< -o $@
 
 build/libnavigation.a: $(objects)
 	$(AR) rcs $@ $^
