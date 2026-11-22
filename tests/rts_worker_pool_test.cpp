@@ -77,6 +77,50 @@ void join_on_error() {
     require((visits == std::array<unsigned, 4>{2, 2, 2, 2}), "The pool must be reusable after an error");
 }
 
+void alternating_participants_and_errors() {
+    WorkerPool pool(8);
+    for (unsigned round = 0; round < 32; ++round) {
+        for (const std::size_t items : {0U, 1U, 2U, 7U, 8U, 43U, 3U, 1U, 8U}) {
+            std::array<unsigned, 8> callbacks{};
+            std::array<unsigned, 43> visits{};
+            pool.run(items, [&](unsigned lane, std::size_t begin, std::size_t end) {
+                require(lane < std::min<std::size_t>(8, items), "An inactive lane received another dispatch");
+                require(begin < end && end <= items, "A lane retained a previous dispatch range");
+                ++callbacks[lane];
+                for (auto n = begin; n < end; ++n) ++visits[n];
+            });
+            for (std::size_t lane = 0; lane < callbacks.size(); ++lane) {
+                require(callbacks[lane] == unsigned(lane < std::min<std::size_t>(8, items)),
+                        "A participating lane missed or repeated a task");
+            }
+            for (std::size_t n = 0; n < visits.size(); ++n) {
+                require(visits[n] == unsigned(n < items), "Alternating dispatch sizes changed exact item coverage");
+            }
+        }
+    }
+
+    std::array<unsigned, 8> completed{};
+    bool ordered = false;
+    try {
+        pool.run(8, [&](unsigned lane, std::size_t, std::size_t) {
+            ++completed[lane];
+            if (lane == 0) throw std::runtime_error("owner failure");
+            if (lane == 1 || lane == 5) throw std::runtime_error("worker failure");
+        });
+    } catch (const std::runtime_error& error) {
+        ordered = std::string(error.what()) == "owner failure";
+    }
+    require(ordered, "Exception selection must remain in lane order after joining everyone");
+    require(std::all_of(completed.begin(), completed.end(), [](auto value) { return value == 1; }),
+            "Multiple failures skipped an outstanding lane");
+    pool.run(1, [](unsigned lane, std::size_t begin, std::size_t end) {
+        require(lane == 0 && begin == 0 && end == 1, "Owner reuse failed after multiple exceptions");
+    });
+    pool.run(8, [&](unsigned lane, std::size_t, std::size_t) { ++completed[lane]; });
+    require(std::all_of(completed.begin(), completed.end(), [](auto value) { return value == 2; }),
+            "A stale mailbox survived error recovery");
+}
+
 void parallel_world() {
     World initial;
     initial.map.width = 28;
@@ -134,6 +178,7 @@ void parallel_world() {
 int main() {
     dispatch_and_reuse();
     join_on_error();
+    alternating_participants_and_errors();
     parallel_world();
     std::cout << "RTS worker tests passed (persistent lanes, exception joins, visibility and ordered combat)\n";
 }

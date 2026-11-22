@@ -16,6 +16,17 @@ namespace coastal::rts {
 
 struct WorkerPool::Impl {
     static constexpr unsigned max_count = 8;
+    // A broadcast made every awakened lane queue on the same ready mutex.
+    // Independent sleeping mailboxes keep publication local to each lane;
+    // pending work remains visible even before that lane reaches its wait.
+    struct alignas(128) Wakeup {
+        std::mutex mutex;
+        std::condition_variable ready;
+        const Job* task = nullptr;
+        std::size_t items = 0;
+        unsigned lanes = 0;
+        bool stopping = false;
+    };
 
     Impl(unsigned count, bool measure) : count(count), measure(measure), usage(count) {
         threads.reserve(count - 1);
@@ -32,11 +43,14 @@ struct WorkerPool::Impl {
     ~Impl() { stop(); }
 
     void stop() {
-        {
-            std::lock_guard lock(mutex);
-            stopping = true;
+        for (unsigned lane = 1; lane < count; ++lane) {
+            auto& wakeup = wakeups[lane];
+            {
+                std::lock_guard lock(wakeup.mutex);
+                wakeup.stopping = true;
+            }
+            wakeup.ready.notify_one();
         }
-        ready.notify_all();
         for (auto& thread : threads) thread.join();
     }
 
@@ -68,19 +82,20 @@ struct WorkerPool::Impl {
     }
 
     void wait_for_work(unsigned lane) {
-        std::uint64_t observed = 0;
-        std::unique_lock lock(mutex);
+        auto& wakeup = wakeups[lane];
         for (;;) {
-            ready.wait(lock, [&] { return stopping || generation != observed; });
-            if (stopping) return;
-            observed = generation;
-            if (lane >= participants) continue;
-            const auto* task = job;
-            const auto items = size;
-            const auto lanes = participants;
+            std::unique_lock lock(wakeup.mutex);
+            wakeup.ready.wait(lock, [&] { return wakeup.stopping || wakeup.task; });
+            if (wakeup.stopping) return;
+            const auto* task = wakeup.task;
+            const auto items = wakeup.items;
+            const auto lanes = wakeup.lanes;
+            wakeup.task = nullptr;
             lock.unlock();
             execute(lane, items, lanes, *task);
-            lock.lock();
+            // All execute writes, including exceptions and observations,
+            // remain published by the original blocking completion join.
+            std::lock_guard completed(mutex);
             if (!--remaining) joined.notify_one();
         }
     }
@@ -103,17 +118,21 @@ struct WorkerPool::Impl {
         } else {
             {
                 std::lock_guard lock(mutex);
-                job = &task;
-                size = items;
-                participants = lanes;
                 remaining = lanes - 1;
-                ++generation;
             }
-            ready.notify_all();
+            for (unsigned lane = 1; lane < lanes; ++lane) {
+                auto& wakeup = wakeups[lane];
+                {
+                    std::lock_guard lock(wakeup.mutex);
+                    wakeup.items = items;
+                    wakeup.lanes = lanes;
+                    wakeup.task = &task;
+                }
+                wakeup.ready.notify_one();
+            }
             execute(0, items, lanes, task);
             std::unique_lock lock(mutex);
             joined.wait(lock, [&] { return !remaining; });
-            job = nullptr;
         }
         for (unsigned lane = 0; lane < lanes; ++lane) {
             if (failures[lane]) std::rethrow_exception(failures[lane]);
@@ -125,16 +144,11 @@ struct WorkerPool::Impl {
     std::vector<WorkerUsage> usage;
     std::array<std::exception_ptr, max_count> failures{};
     std::vector<std::thread> threads;
+    std::array<Wakeup, max_count> wakeups;
     std::mutex mutex;
-    std::condition_variable ready;
     std::condition_variable joined;
     std::atomic_flag dispatching{};
-    const Job* job = nullptr;
-    std::uint64_t generation = 0;
-    std::size_t size = 0;
-    unsigned participants = 0;
     unsigned remaining = 0;
-    bool stopping = false;
 };
 
 WorkerPool::WorkerPool(unsigned count, bool measure) {

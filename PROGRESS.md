@@ -2,6 +2,10 @@
 
 按北京时间记录实际工作的日期，最近的在前。收工时由维护者核对当天可公开的代码、测试和受影响的说明。每条日结列出已合并的 PR、验证结果，以及还有谁在做什么。跨日任务留在对应的 Issue 或草稿 PR，方便下一位贡献者接手。[开发路线图](ROADMAP.md) · [认领任务](CONTRIBUTING.md)
 
+## 2026-11-23
+
+**工作线程独立 mailbox 派发** 通用线程池只唤醒本轮参与的持久线程，保留调用线程参与、阻塞汇合、异常顺序和完成后的内存可见性。公开套件 `make -j4 check test rts-test macos-host-test rts-worker-dispatch-bench` 通过，新增回归覆盖参与数反复变化及多异常后复用；独立基准的 12 组工作量在 1／4／8 线程下校验和一致，未修改调度策略。此项提供派发时序观测，未将微测当作整场帧率加速。原版还原、素材与私有运行记录保留本地，维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 接续实机总装验收。 [PR #138](https://github.com/lukecao7/yr-native-macos/pull/138)
+
 ## 2026-11-22
 
 **工作线程快照与显示刷新分开调度** 通用 C++ 会话显式交给单一工作线程，保留输入顺序、不可变帧、有限队列与背压。宿主以真实显示刷新脉冲推进呈现，新帧用通知唤醒；每脉冲最多提交一次，取消链式空轮询。新增回归覆盖逐帧序号、借用缓冲所有权、通知撤销、迟到回调、异常与不同刷新率；实际主队列 helper 的测试还验证异步 block 持有状态直到执行结束，避免引用参数在回调前失效。公开套件 `make -j4 check test rts-test macos-host-test` 通过，包含真实主队列回调的持有与释放检查。此项仅包含通用宿主和合成测试，原版还原、素材及运行记录留在本地；实际总装窗口仍由维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 接续核验。 [PR #137](https://github.com/lukecao7/yr-native-macos/pull/137)
