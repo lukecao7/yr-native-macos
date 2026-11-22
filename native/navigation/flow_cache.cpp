@@ -2,6 +2,7 @@
 #include "packed_min_heap.h"
 #include "flow_repair.h"
 #include <algorithm>
+#include <atomic>
 #include <exception>
 #include <iterator>
 #include <tuple>
@@ -299,16 +300,19 @@ bool FlowCache::prepare_active(std::string& error, unsigned requested_threads) {
         if (missing.empty()) {last_prepare_threads_=1; return true;}
 
         record_reserved(missing.size() * bytes_per_field);
-        unsigned threads=std::min<unsigned>(4,std::max<unsigned>(1,requested_threads));
+        unsigned threads=std::min<unsigned>(8,std::max<unsigned>(1,requested_threads));
         threads=std::min<unsigned>(threads,unsigned(missing.size()));
         if (missing.size()<4 || grid_.size()*missing.size()<16384) threads=1;
         std::vector<Field> built(missing.size());
         std::vector<std::exception_ptr> failures(threads);
+        std::atomic<std::size_t> next_index{0};
         const auto build_range=[&](unsigned worker) {
             try {
-                for (std::size_t i=missing.size()*worker/threads;
-                     i<missing.size()*(worker+1)/threads;++i)
+                for (;;) {
+                    const std::size_t i=next_index.fetch_add(1,std::memory_order_relaxed);
+                    if (i>=missing.size()) break;
                     built[i]=build_field(width_,height_,grid_,revision_,missing[i],edges_);
+                }
             } catch (...) {failures[worker]=std::current_exception();}
         };
         std::vector<std::thread> workers;

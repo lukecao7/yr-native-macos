@@ -2,6 +2,10 @@
 
 按北京时间记录实际工作的日期，最近的在前。收工时由维护者核对当天可公开的代码、测试和受影响的说明。每条日结列出已合并的 PR、验证结果，以及还有谁在做什么。跨日任务留在对应的 Issue 或草稿 PR，方便下一位贡献者接手。[开发路线图](ROADMAP.md) · [认领任务](CONTRIBUTING.md)
 
+## 2026-11-22
+
+**导航库优化编译与八线程冷目标准备** 默认构建为导航库启用 `-O2` 并保留严格浮点选项；请求 8 线程时可以使用调用线程及最多 7 个工作线程，逐个领取待构建目标，结束后仍按目标的稳定顺序发布。独立公开套件 `make -j4 check test rts-test macos-host-test` 通过，新增回归逐项比较 1、4、8 线程的 1,024 份完整距离数组。此项验证通用网格导航与宿主，没有原版游戏文件。维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 接续原版体验修复、千单位真实窗口长测及本轮总装交付。 [PR #135](https://github.com/lukecao7/yr-native-macos/pull/135)
+
 ## 2026-11-21
 
 **Metal 显示与 3D 场景改为三缓冲** `CAMetalLayer` 的 `maximumDrawableCount`、共享像素缓冲、命令队列容量与 3D 场景暂存槽从 `2` 调至 `3`，消除 `nextDrawable` 在显示扫描相位上的等待。公开套件 `make -j4 check test rts-test macos-host-test` 通过。Apple M2 真机签名窗口实测雪地原版地图 765 帧，`drawableAcquire` P95 从 14.06 ms 降至 0.041 ms，`frameWork` P95 从 16.83 ms 降至 4.82 ms，显示间隔 P50、P95 与 P99 均为 16.67 ms（此前雪地失败运行 P95 为 33.33 ms）；同机 1,200 单位 2D/3D 切换压测实显 780 个 3D 帧与 2 次切换，显示间隔和 3D 帧间隔 P50、P95、P99 及切换最大间隔均为 16.67 ms，`drawableAcquire` P95 为 0.064 ms，峰值 RSS 175.6 MiB。本轮实测未执行系统鼠标键盘交互验收，三阵营完整实机验收与剩余机制仍由维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 接续。 [PR #134](https://github.com/lukecao7/yr-native-macos/pull/134)
