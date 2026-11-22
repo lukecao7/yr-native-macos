@@ -4,7 +4,7 @@
 
 ## 2026-11-23
 
-**工作线程独立 mailbox 派发** 通用线程池只唤醒本轮参与的持久线程，保留调用线程参与、阻塞汇合、异常顺序和完成后的内存可见性。公开套件 `make -j4 check test rts-test macos-host-test rts-worker-dispatch-bench` 通过，新增回归覆盖参与数反复变化及多异常后复用；独立基准的 12 组工作量在 1／4／8 线程下校验和一致，未修改调度策略。此项提供派发时序观测，未将微测当作整场帧率加速。原版还原、素材与私有运行记录保留本地，维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 接续实机总装验收。
+**工作线程独立 mailbox 派发** 通用线程池只唤醒本轮参与的持久线程，保留调用线程参与、阻塞汇合、异常顺序和完成后的内存可见性。公开套件 `make -j4 check test rts-test macos-host-test rts-worker-dispatch-bench` 通过，新增回归覆盖参与数反复变化及多异常后复用；独立基准的 12 组工作量在 1／4／8 线程下校验和一致，未修改调度策略。此项提供派发时序观测，未将微测当作整场帧率加速。原版还原、素材与私有运行记录保留本地，维护者 @lukecao7 在 [任务 #10](https://github.com/lukecao7/yr-native-macos/issues/10) 接续实机总装验收。 [PR #138](https://github.com/lukecao7/yr-native-macos/pull/138)
 
 ## 2026-11-22
 
