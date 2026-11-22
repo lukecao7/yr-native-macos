@@ -152,6 +152,122 @@ void require_valid_frame_sequence() {
            "Reject a regressing injected clock");
 }
 
+void follow_display_pulses_without_a_second_clock() {
+    Fixture fixture;
+    fixture.time += 3ms;
+    expect(fixture.loop.display_tick(100, [&] {
+               fixture.time += 2ms;
+               return FrameCommit{0, 12, true};
+           }) == FrameTick::Presented,
+           "A real display pulse starts a sequential frame");
+    fixture.time = fixture.launched + 13ms;
+    expect(fixture.time < fixture.loop.next_due(),
+           "The independent completion-relative timer would still be early");
+    expect(fixture.loop.display_tick(200, [&] {
+               fixture.time += 2ms;
+               return FrameCommit{1, 13, true};
+           }) == FrameTick::Presented,
+           "The next display pulse is not gated by an independent timer phase");
+
+    fixture.time = fixture.launched + 23ms;
+    expect(fixture.loop.display_tick(300, [&] {
+               fixture.time += 35ms;
+               return FrameCommit{2, 14, true};
+           }) == FrameTick::Presented,
+           "A drawable stall still commits exactly its real session frame");
+    fixture.time = fixture.launched + 63ms;
+    expect(fixture.loop.display_tick(700, [] { return FrameCommit{3, 15, true}; }) == FrameTick::Presented,
+           "After a stall the latest display request does not skip a further whole timer slot");
+    const auto metrics = fixture.loop.metrics();
+    expect(metrics.presented_frames == 4 && metrics.full_original_frames == 4 &&
+               metrics.last_original_active_objects == 15 && metrics.first_present == 5ms &&
+               metrics.presentation_interval && metrics.presentation_interval->sample_count == 3 &&
+               metrics.presentation_interval->p50 == 10ms && metrics.presentation_interval->p95 == 43ms &&
+               metrics.frame_work && metrics.frame_work->p95 == 35ms,
+           "Display pacing retains actual completion intervals and stalled work, without fabricated frames");
+}
+
+void retry_an_unready_display_pulse_without_duplicate_commits() {
+    Fixture fixture;
+    std::uint64_t calls = 0;
+    expect(fixture.loop.display_tick(100, [&]() -> std::optional<FrameCommit> {
+               ++calls;
+               fixture.time += 1ms;
+               return std::nullopt;
+           }) == FrameTick::WaitingForFrame,
+           "An empty display attempt does not count as a presentation");
+    expect(fixture.loop.display_tick(100, [&] {
+               ++calls;
+               fixture.time += 1ms;
+               return FrameCommit{0, 4};
+           }) == FrameTick::Presented,
+           "A producer that becomes ready in the same refresh can deliver its real frame");
+    const auto must_not_run = []() -> FrameCommit {
+        throw std::runtime_error("A stale display pulse dispatched a frame");
+    };
+    expect(fixture.loop.display_tick(100, must_not_run) == FrameTick::NotDue &&
+               fixture.loop.display_tick(99, must_not_run) == FrameTick::NotDue && calls == 2 &&
+               fixture.loop.metrics().presented_frames == 1 &&
+               !fixture.loop.metrics().presentation_interval,
+           "A committed or stale refresh cannot repeat a frame or add timing samples");
+
+    expect(fixture.loop.display_tick(200, [&]() -> std::optional<FrameCommit> {
+               expect(fixture.loop.display_tick(300, must_not_run) == FrameTick::NotDue,
+                      "A display callback cannot reenter with a newer pulse");
+               return std::nullopt;
+           }) == FrameTick::WaitingForFrame &&
+               fixture.loop.display_tick(200, [] { return FrameCommit{1, 5}; }) == FrameTick::Presented,
+           "A rejected reentrant pulse does not consume a pending display attempt");
+    expect(fixture.loop.display_tick(300, [] { return FrameCommit{3, 6}; }) == FrameTick::InvalidFrame &&
+               fixture.loop.metrics().presented_frames == 2,
+           "Display pacing retains consecutive-index validation");
+    expect(fixture.loop.display_tick(400, must_not_run) == FrameTick::Stopped,
+           "A display sequence error stops all later pulses");
+}
+
+void preserve_the_session_rate_on_different_displays() {
+    const auto count = [](FrameClock::duration refresh, std::size_t pulses) {
+        DisplayCadence cadence(16'666'667ns);
+        std::size_t accepted = 0;
+        for (std::size_t i = 0; i < pulses; ++i) accepted += cadence.accepts_refresh(refresh);
+        return accepted;
+    };
+    expect(count(16'666'667ns, 600) == 600 && count(8'333'333ns, 1200) == 600 &&
+               count(6'944'444ns, 1440) == 600 && count(13'333'333ns, 750) == 600,
+           "60 Hz sessions keep 60 frames per second on 60, 120, 144 and 75 Hz outputs");
+    expect(count(20ms, 500) == 500,
+           "An output slower than the session is used on every real refresh");
+    expect(count(0ns, 10) == 10,
+           "Missing refresh-period metadata never silently halves the callback cadence");
+
+    bool rejected = false;
+    try { DisplayCadence cadence(0ns); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    expect(rejected, "Display cadence rejects an invalid session interval");
+}
+
+void bound_display_retries_and_ignore_late_publishers() {
+    Fixture fixture;
+    unsigned attempts=0;
+    const auto empty=[&]() -> std::optional<FrameCommit> {++attempts;return std::nullopt;};
+    const auto must_not_run=[]() -> FrameCommit {throw std::runtime_error("a late or excessive retry ran");};
+    expect(fixture.loop.display_tick(100,empty)==FrameTick::WaitingForFrame&&fixture.loop.can_retry_display(100),
+           "A display pulse with no frame permits one later ready hint");
+    expect(fixture.loop.display_tick(100,empty)==FrameTick::WaitingForFrame&&!fixture.loop.can_retry_display(100)&&
+               fixture.loop.display_tick(100,must_not_run)==FrameTick::NotDue&&attempts==2,
+           "Even an empty retry exhausts the pulse budget without starting a 1 ms poll chain");
+    expect(fixture.loop.display_tick(200,empty)==FrameTick::WaitingForFrame&&
+               fixture.loop.display_tick(100,must_not_run)==FrameTick::NotDue&&fixture.loop.can_retry_display(200),
+           "A late notification cannot borrow the next pulse's retry budget");
+    expect(fixture.loop.display_tick(200,[] {return FrameCommit{0,1200,true};})==FrameTick::Presented&&
+               !fixture.loop.can_retry_display(200)&&fixture.loop.display_tick(200,must_not_run)==FrameTick::NotDue&&
+               fixture.loop.metrics().presented_frames==1&&fixture.loop.metrics().full_original_frames==1,
+           "A ready hint delivers one real frame and cannot repeat its commit");
+    fixture.loop.stop();
+    expect(!fixture.loop.can_retry_display(300)&&fixture.loop.display_tick(300,must_not_run)==FrameTick::Stopped,
+           "Late publisher hints cannot dispatch after shutdown");
+}
+
 void count_complete_frames_across_menu_transitions() {
     Fixture fixture;
     // These flags are unit-test inputs for the counting rule.
@@ -256,6 +372,10 @@ int main() {
         continuously_submit_diagnostic_frames();
         skip_waiting_and_late_slots();
         require_valid_frame_sequence();
+        follow_display_pulses_without_a_second_clock();
+        retry_an_unready_display_pulse_without_duplicate_commits();
+        preserve_the_session_rate_on_different_displays();
+        bound_display_retries_and_ignore_late_publishers();
         count_complete_frames_across_menu_transitions();
         retain_a_bounded_timing_window();
         check_stop_during_dispatch();

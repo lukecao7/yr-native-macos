@@ -39,6 +39,19 @@ struct FrameMetrics {
 
 enum class FrameTick { NotDue, WaitingForFrame, Presented, Stopped, InvalidFrame };
 
+// Called once per display refresh by its single callback owner. Fractional
+// refresh ratios preserve the session rate on, for example, a 144 Hz display.
+class DisplayCadence {
+public:
+    explicit DisplayCadence(FrameClock::duration interval);
+    bool accepts_refresh(FrameClock::duration refresh_period) noexcept;
+
+private:
+    const FrameClock::duration interval_;
+    double phase_ = 0;
+    bool started_ = false;
+};
+
 // Single main-thread owner. A step reports a commit after presentation has
 // completed at the host boundary. A pending step reports no commit.
 class FrameLoop {
@@ -49,6 +62,14 @@ public:
     FrameLoop(FrameClock::duration interval, FrameClock::time_point launched_at,
               Now now = FrameClock::now, std::size_t sample_limit = 4096);
     FrameTick tick(const Step& step);
+    // A display-driven host already has a cadence. Do not gate its pulses on a
+    // second launch-relative timer. An empty attempt may retry the same pulse
+    // once; each increasing pulse permits at most one real, sequential commit.
+    FrameTick display_tick(std::uint64_t pulse, const Step& step);
+    bool can_retry_display(std::uint64_t pulse) const noexcept {
+        return !stopped_ && !in_step_ && display_pulse_ && *display_pulse_ == pulse &&
+               !display_pulse_committed_ && !display_pulse_retried_;
+    }
     // Check the next index before showing a frame. Return a rejected commit
     // from Step so tick reports InvalidFrame without counting a presentation.
     bool accepts_frame(const FrameCommit& commit) const noexcept {
@@ -59,6 +80,8 @@ public:
     FrameMetrics metrics() const;
 
 private:
+    FrameTick run_step(const Step& step, bool clock_gated);
+
     const FrameClock::duration interval_;
     const FrameClock::time_point launched_at_;
     const std::size_t sample_limit_;
@@ -68,6 +91,9 @@ private:
     std::vector<std::chrono::nanoseconds> frame_work_;
     std::vector<std::chrono::nanoseconds> presentation_interval_;
     FrameMetrics metrics_;
+    std::optional<std::uint64_t> display_pulse_;
+    bool display_pulse_committed_ = false;
+    bool display_pulse_retried_ = false;
     bool stopped_ = false;
     bool in_step_ = false;
 };
