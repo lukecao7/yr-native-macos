@@ -2,6 +2,7 @@
 #include "macos_host/frame_loop.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -42,6 +43,30 @@ std::optional<Percentiles> summarize(std::vector<Sample> samples) {
 
 }  // namespace
 
+DisplayCadence::DisplayCadence(FrameClock::duration interval) : interval_(interval) {
+    if (interval_ <= FrameClock::duration::zero()) {
+        throw std::invalid_argument("DisplayCadence requires a positive interval");
+    }
+}
+
+bool DisplayCadence::accepts_refresh(FrameClock::duration refresh_period) noexcept {
+    if (refresh_period <= FrameClock::duration::zero()) refresh_period = interval_;
+    auto refreshes = std::max(1.0, std::chrono::duration<double>(interval_).count() /
+                                  std::chrono::duration<double>(refresh_period).count());
+    // The session and display periods can be rounded to different nanoseconds.
+    const auto integral = std::round(refreshes);
+    if (std::abs(refreshes - integral) < 0.000001) refreshes = integral;
+    if (!started_) {
+        started_ = true;
+        return true;
+    }
+    phase_ += 1;
+    if (phase_ + 0.000000001 < refreshes) return false;
+    phase_ = std::max(0.0, phase_ - refreshes);
+    if (phase_ >= refreshes) phase_ = std::fmod(phase_, refreshes);
+    return true;
+}
+
 FrameLoop::FrameLoop(FrameClock::duration interval, FrameClock::time_point launched_at,
                      Now now, std::size_t sample_limit)
     : interval_(interval),
@@ -57,6 +82,29 @@ FrameLoop::FrameLoop(FrameClock::duration interval, FrameClock::time_point launc
 }
 
 FrameTick FrameLoop::tick(const Step& step) {
+    return run_step(step, true);
+}
+
+FrameTick FrameLoop::display_tick(std::uint64_t pulse, const Step& step) {
+    if (stopped_) return FrameTick::Stopped;
+    if (in_step_ || (display_pulse_ &&
+        (pulse < *display_pulse_ || (pulse == *display_pulse_ &&
+                                  (display_pulse_committed_ || display_pulse_retried_))))) {
+        return FrameTick::NotDue;
+    }
+    if (!display_pulse_ || pulse > *display_pulse_) {
+        display_pulse_ = pulse;
+        display_pulse_committed_ = false;
+        display_pulse_retried_ = false;
+    } else {
+        display_pulse_retried_ = true;
+    }
+    const auto result = run_step(step, false);
+    if (result == FrameTick::Presented) display_pulse_committed_ = true;
+    return result;
+}
+
+FrameTick FrameLoop::run_step(const Step& step, bool clock_gated) {
     if (stopped_) {
         return FrameTick::Stopped;
     }
@@ -64,7 +112,7 @@ FrameTick FrameLoop::tick(const Step& step) {
         return FrameTick::NotDue;
     }
     const auto started = now_();
-    if (started < next_due_) {
+    if (clock_gated && started < next_due_) {
         return FrameTick::NotDue;
     }
 
@@ -91,9 +139,14 @@ FrameTick FrameLoop::tick(const Step& step) {
         return FrameTick::InvalidFrame;
     }
 
-    // Keep the cadence anchored and skip every elapsed slot.
-    const auto until_next = interval_ - (finished - next_due_) % interval_;
-    next_due_ = finished + until_next;
+    if (clock_gated) {
+        // The timer fallback keeps its cadence anchored and skips elapsed slots.
+        const auto until_next = interval_ - (finished - next_due_) % interval_;
+        next_due_ = finished + until_next;
+    } else {
+        // Only used if a display-driven host later falls back to its timer.
+        next_due_ = finished + interval_;
+    }
     if (!commit) {
         return FrameTick::WaitingForFrame;
     }

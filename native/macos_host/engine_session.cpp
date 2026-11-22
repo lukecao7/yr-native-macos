@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "session.h"
+#include "presented_session.h"
 
 #include "rts_ai/strategy.h"
 #include "rts_3d/scene.h"
@@ -480,11 +481,13 @@ private:
 }  // namespace
 
 std::unique_ptr<Session> create_session(const LaunchOptions& options, std::string& error) {
-    if (options.stress) return std::make_unique<EngineSession>(make_stress_match(), options);
+    // This implementation owns only worker-safe C++ state. Setup getters run
+    // before the producer starts; later frame/input/scene calls share one worker.
+    if (options.stress) return make_presented_session(std::make_unique<EngineSession>(make_stress_match(), options));
     auto world = open_match(options.data_directory,
                             options.skirmish_map.empty() ? "Basin.map" : options.skirmish_map, error);
     if (!world) return nullptr;
-    return std::make_unique<EngineSession>(std::move(*world), options);
+    return make_presented_session(std::make_unique<EngineSession>(std::move(*world), options));
 }
 
 }  // namespace coastal::macos_host

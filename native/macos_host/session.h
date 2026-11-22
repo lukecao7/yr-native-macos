@@ -5,6 +5,7 @@
 #include "launch_options.h"
 
 #include <memory>
+#include <functional>
 #include <span>
 #include <string_view>
 
@@ -76,6 +77,7 @@ struct KeyEvent {
 
 class Session {
 public:
+    using FrameReadyHandler = std::function<void()>;
     virtual ~Session() = default;
     virtual Viewport viewport() const noexcept = 0;
     virtual FrameClock::duration frame_interval() const noexcept = 0;
@@ -89,6 +91,14 @@ public:
     virtual std::optional<Frame> advance_frame_into(std::span<std::uint8_t>) {
         return advance_frame();
     }
+    // Optional async hint; it never represents a presentation or advances the
+    // session. The handler may run on a publisher thread (or immediately when
+    // installed over ready frames), and must only schedule host work promptly.
+    // Registration/revocation synchronize with publication. Clearing revokes
+    // the registration; a notification already in flight may still arrive.
+    // Deactivate host callback state and clear this before joining a publisher.
+    virtual bool supports_frame_ready_notifications() const noexcept { return false; }
+    virtual void set_frame_ready_handler(FrameReadyHandler) noexcept {}
     virtual void pointer_event(PointerEvent event) noexcept = 0;
     virtual void scroll_event(ScrollEvent) noexcept {}
     virtual void key_event(KeyEvent) noexcept {}

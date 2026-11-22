@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreVideo/CVDisplayLink.h>
+#import <dispatch/dispatch.h>
+#include <mach/mach_time.h>
 
 #include "frame_image.h"
 #include "input_view.h"
 #include "metal_presenter.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -192,10 +197,54 @@ void install_quit_menu(NSApplication* application) {
                     stressWindow:(BOOL)stressWindow;
 - (void)start;
 - (void)detach;
+- (BOOL)startDisplayLink;
+- (void)stopDisplayLink;
+- (void)driveDisplayPulse:(std::uint64_t)outputHostTime;
+- (void)frameReadyForDisplay:(std::uint64_t)outputHostTime;
+- (void)renderFrameForDisplay:(std::uint64_t)outputHostTime;
+- (void)writeSchedulingMetrics;
 - (int)status;
 - (host::FrameMetrics)metrics;
 - (std::optional<host::MetalMetrics>)finishPresentation;
 @end
+
+namespace {
+
+constexpr unsigned display_signal = 1, frame_ready_signal = 2;
+
+struct DisplayPulseState {
+    DisplayPulseState(CoastalAppDelegate* owner, host::FrameClock::duration interval)
+        : target(owner), cadence(interval), fallback_period(interval) {}
+
+    __weak CoastalAppDelegate* target;
+    host::DisplayCadence cadence;
+    const host::FrameClock::duration fallback_period;
+    std::atomic<bool> active{true};
+    std::atomic<unsigned> pending_signals{0};
+    std::atomic<std::uint64_t> output_host_time{0};
+    std::atomic<std::uint64_t> callbacks{0}, eligible_pulses{0}, coalesced_pulses{0};
+    std::atomic<std::uint64_t> ready_notifications{0}, coalesced_ready{0};
+};
+
+// The dispatched block outlives this call: capture an owning value, never a
+// reference to the callback's temporary shared_ptr argument.
+bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) {
+    if (!state->active.load(std::memory_order_acquire)) return false;
+    if (state->pending_signals.fetch_or(signal,std::memory_order_acq_rel)) return false;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        const auto signals=state->pending_signals.exchange(0,std::memory_order_acq_rel);
+        if (!state->active.load(std::memory_order_acquire)) return;
+        CoastalAppDelegate* target=state->target;
+        const auto output=state->output_host_time.load(std::memory_order_acquire);
+        // A frame-ready hint never creates a new refresh pulse. If both reasons
+        // merged, the real display pulse makes the single first attempt.
+        if (signals&display_signal) [target driveDisplayPulse:output];
+        else if (signals&frame_ready_signal) [target frameReadyForDisplay:output];
+    });
+    return true;
+}
+
+}  // namespace
 
 @implementation CoastalAppDelegate {
     host::Session* _session;
@@ -204,6 +253,16 @@ void install_quit_menu(NSApplication* application) {
     NSWindow* _window;
     CoastalFrameView* _surface;
     NSTimer* _timer;
+    CVDisplayLinkRef _displayLink;
+    std::shared_ptr<DisplayPulseState> _displayState;
+    CGDirectDisplayID _displayID;
+    double _hostSecondsPerTick;
+    std::uint64_t _retryOutputTime;
+    std::uint64_t _currentDisplayOutput;
+    std::uint64_t _mainPulses, _readinessRetries, _emptyAttempts;
+    std::uint64_t _readyWakeups, _ignoredReadySignals, _fallbackRetries;
+    BOOL _usesReadyNotifications;
+    BOOL _usedDisplayLink, _timerFallback;
     BOOL _stopped;
     int _status;
 }
@@ -213,6 +272,9 @@ void install_quit_menu(NSApplication* application) {
                     stressWindow:(BOOL)stressWindow {
     if (!(self = [super init])) return nil;
     _session = session;
+    mach_timebase_info_data_t timebase{};
+    if (mach_timebase_info(&timebase) != KERN_SUCCESS || !timebase.denom) return nil;
+    _hostSecondsPerTick = double(timebase.numer) / double(timebase.denom) / 1'000'000'000.0;
     _loop = std::make_unique<host::FrameLoop>(session->frame_interval(), launchedAt);
     const auto viewport = session->viewport();
     const CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
@@ -224,6 +286,8 @@ void install_quit_menu(NSApplication* application) {
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
                   backing:NSBackingStoreBuffered defer:NO];
     _window.releasedWhenClosed = NO;
+    // The engine restores games through its save files; no AppKit window archive is used.
+    _window.restorable = NO;
     _window.title = NSProcessInfo.processInfo.processName;
     _window.contentView = _surface;
     _window.acceptsMouseMovedEvents = YES;
@@ -244,7 +308,102 @@ void install_quit_menu(NSApplication* application) {
 - (void)start {
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
-    [self scheduleFrame];
+    if (![self startDisplayLink]) {
+        _timerFallback = YES;
+        [self scheduleFrame];
+    }
+}
+
+- (BOOL)startDisplayLink {
+    NSNumber* number = _window.screen.deviceDescription[@"NSScreenNumber"];
+    _displayID = number ? number.unsignedIntValue : CGMainDisplayID();
+    if (CVDisplayLinkCreateWithActiveCGDisplays(&_displayLink) != kCVReturnSuccess) return NO;
+    if (CVDisplayLinkSetCurrentCGDisplay(_displayLink, _displayID) != kCVReturnSuccess) {
+        [self stopDisplayLink];
+        return NO;
+    }
+    _displayState = std::make_shared<DisplayPulseState>(self, _session->frame_interval());
+    const auto state = _displayState;
+    const auto result = CVDisplayLinkSetOutputHandler(_displayLink,
+        ^CVReturn(CVDisplayLinkRef link, const CVTimeStamp* now, const CVTimeStamp* output,
+                  CVOptionFlags flagsIn, CVOptionFlags* flagsOut) {
+            (void)link; (void)now; (void)flagsIn; (void)flagsOut;
+            if (!state->active.load(std::memory_order_acquire)) return kCVReturnSuccess;
+            state->callbacks.fetch_add(1, std::memory_order_relaxed);
+            auto refresh = state->fallback_period;
+            if ((output->flags & kCVTimeStampVideoRefreshPeriodValid) &&
+                output->videoRefreshPeriod > 0 && output->videoTimeScale > 0) {
+                const auto seconds = double(output->videoRefreshPeriod) / output->videoTimeScale;
+                if (std::isfinite(seconds) && seconds > 0 && seconds <= 1) {
+                    refresh = std::chrono::duration_cast<host::FrameClock::duration>(
+                        std::chrono::duration<double>(seconds));
+                }
+            }
+            if (!state->cadence.accepts_refresh(refresh)) return kCVReturnSuccess;
+            state->eligible_pulses.fetch_add(1, std::memory_order_relaxed);
+            // CV hostTime and mach_absolute_time use the same clock. Without
+            // a valid future timestamp the attempt simply has no retry budget.
+            const auto outputTime = (output->flags & kCVTimeStampHostTimeValid) && output->hostTime
+                ? output->hostTime : mach_absolute_time();
+            state->output_host_time.store(outputTime, std::memory_order_release);
+            if (!post_main_signal(state,display_signal)) {
+                state->coalesced_pulses.fetch_add(1, std::memory_order_relaxed);
+                return kCVReturnSuccess;
+            }
+            return kCVReturnSuccess;
+        });
+    _usesReadyNotifications=_session->supports_frame_ready_notifications();
+    if (_usesReadyNotifications) {
+        _session->set_frame_ready_handler([weak=std::weak_ptr<DisplayPulseState>(state)] {
+            if (const auto signal=weak.lock();signal&&signal->active.load(std::memory_order_acquire)) {
+                signal->ready_notifications.fetch_add(1,std::memory_order_relaxed);
+                if(!post_main_signal(signal,frame_ready_signal))signal->coalesced_ready.fetch_add(1,std::memory_order_relaxed);
+            }
+        });
+    }
+    if (result != kCVReturnSuccess || CVDisplayLinkStart(_displayLink) != kCVReturnSuccess) {
+        [self stopDisplayLink];
+        return NO;
+    }
+    _usedDisplayLink = YES;
+    return YES;
+}
+
+- (void)stopDisplayLink {
+    if (_displayState) _displayState->active.store(false, std::memory_order_release);
+    if (_session) _session->set_frame_ready_handler({});
+    if (_displayLink) {
+        CVDisplayLinkStop(_displayLink);
+        CVDisplayLinkRelease(_displayLink);
+        _displayLink = nullptr;
+    }
+}
+
+- (void)dealloc {
+    [self stopDisplayLink];
+}
+
+- (void)driveDisplayPulse:(std::uint64_t)outputHostTime {
+    if (_stopped || !_displayLink) return;
+    ++_mainPulses;
+    if (outputHostTime<=_currentDisplayOutput) return;
+    _currentDisplayOutput=outputHostTime;
+    [_timer invalidate];
+    _timer = nil;
+    [self renderFrameForDisplay:outputHostTime];
+}
+
+- (void)frameReadyForDisplay:(std::uint64_t)outputHostTime {
+    if (_stopped || !_displayLink) return;
+    ++_readyWakeups;
+    const auto now=mach_absolute_time();
+    const auto remaining=outputHostTime>now?(outputHostTime-now)*_hostSecondsPerTick:0;
+    if(outputHostTime!=_currentDisplayOutput||remaining<=0.001||!_loop->can_retry_display(outputHostTime)) {
+        ++_ignoredReadySignals;
+        return;
+    }
+    ++_readinessRetries;
+    [self renderFrameForDisplay:outputHostTime];
 }
 
 - (void)scheduleFrame {
@@ -257,19 +416,47 @@ void install_quit_menu(NSApplication* application) {
 - (void)driveFrame:(NSTimer*)timer {
     if (timer != _timer || _stopped) return;
     _timer = nil;
+    if (_displayLink) {
+        const auto now=mach_absolute_time();
+        if(_retryOutputTime!=_currentDisplayOutput||_retryOutputTime<=now||
+           (_retryOutputTime-now)*_hostSecondsPerTick<=0.001||!_loop->can_retry_display(_retryOutputTime))return;
+        ++_readinessRetries;++_fallbackRetries;
+    }
+    [self renderFrameForDisplay:_displayLink ? _retryOutputTime : 0];
+}
+
+- (void)renderFrameForDisplay:(std::uint64_t)outputHostTime {
     @autoreleasepool {
         try {
-            const auto result = _loop->tick([self]() -> std::optional<host::FrameCommit> {
+            const auto step = [self]() -> std::optional<host::FrameCommit> {
                 if (!_window.visible || _window.miniaturized) return std::nullopt;
                 return _delivery.step(*_loop,
                     [self] { return [_surface advanceFrame]; },
                     [self](const host::Frame& frame) { return [_surface presentFrame:frame]; });
-            });
+            };
+            const auto result = outputHostTime ? _loop->display_tick(outputHostTime, step) : _loop->tick(step);
             if (_stopped) return;
             if (result == host::FrameTick::InvalidFrame) {
                 throw std::runtime_error("The session reported a nonconsecutive frame.");
             }
-            [self scheduleFrame];
+            if (result == host::FrameTick::WaitingForFrame) ++_emptyAttempts;
+            if (!_displayLink) {
+                [self scheduleFrame];
+            } else if (!_usesReadyNotifications && result == host::FrameTick::WaitingForFrame &&
+                       _loop->can_retry_display(outputHostTime) &&
+                       _window.visible && !_window.miniaturized) {
+                const auto now = mach_absolute_time();
+                const auto remaining = outputHostTime > now ? (outputHostTime - now) * _hostSecondsPerTick : 0;
+                // A synchronous Session without notifications gets one bounded
+                // retry. FrameLoop consumes the budget even if it is still empty.
+                if (remaining > 0.0015) {
+                    _retryOutputTime = outputHostTime;
+                    _timer = [NSTimer timerWithTimeInterval:std::min(0.001, remaining - 0.001)
+                                                    target:self selector:@selector(driveFrame:)
+                                                  userInfo:nil repeats:NO];
+                    [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
+                }
+            }
         } catch (const std::exception& error) {
             std::cerr << "Coastal Mac Host: " << error.what() << '\n';
             [self stopWithStatus:1];
@@ -286,6 +473,7 @@ void install_quit_menu(NSApplication* application) {
     _status = status;
     [_timer invalidate];
     _timer = nil;
+    [self stopDisplayLink];
     _loop->stop();
     [NSApp stop:nil];
     // A stop request made outside event dispatch needs an event to wake -run.
@@ -307,9 +495,46 @@ void install_quit_menu(NSApplication* application) {
 
 - (void)windowWillClose:(NSNotification*)notification { [self stopWithStatus:0]; }
 
+- (void)windowDidChangeScreen:(NSNotification*)notification {
+    (void)notification;
+    if (!_displayLink || _stopped) return;
+    NSNumber* number = _window.screen.deviceDescription[@"NSScreenNumber"];
+    const auto display = number ? number.unsignedIntValue : CGMainDisplayID();
+    if (display == _displayID) return;
+    if (CVDisplayLinkSetCurrentCGDisplay(_displayLink, display) == kCVReturnSuccess) {
+        _displayID = display;
+    } else {
+        [self stopDisplayLink];
+        _timerFallback = YES;
+        [_timer invalidate];
+        [self scheduleFrame];
+    }
+}
+
+- (void)writeSchedulingMetrics {
+    std::cout << "MAC_HOST_SCHEDULER {\"source\":\""
+              << (_timerFallback ? "timer-fallback" : (_usedDisplayLink ? "cv-display-link" : "timer"))
+              << "\",\"displayId\":" << _displayID
+              << ",\"requestedIntervalNs\":" << std::chrono::duration_cast<std::chrono::nanoseconds>(_session->frame_interval()).count()
+              << ",\"displayCallbacks\":" << (_displayState ? _displayState->callbacks.load() : 0)
+              << ",\"eligiblePulses\":" << (_displayState ? _displayState->eligible_pulses.load() : 0)
+              << ",\"coalescedPulses\":" << (_displayState ? _displayState->coalesced_pulses.load() : 0)
+              << ",\"mainPulses\":" << _mainPulses
+              << ",\"frameReadyNotifications\":" << (_usesReadyNotifications?"true":"false")
+              << ",\"readyNotifications\":" << (_displayState ? _displayState->ready_notifications.load() : 0)
+              << ",\"coalescedReady\":" << (_displayState ? _displayState->coalesced_ready.load() : 0)
+              << ",\"readyWakeups\":" << _readyWakeups
+              << ",\"ignoredReadySignals\":" << _ignoredReadySignals
+              << ",\"fallbackRetries\":" << _fallbackRetries
+              << ",\"readinessRetries\":" << _readinessRetries
+              << ",\"emptyAttempts\":" << _emptyAttempts << "}\n";
+}
+
 - (void)detach {
+    _stopped = YES;
     [_timer invalidate];
     _timer = nil;
+    [self stopDisplayLink];
     _loop->stop();
     _window.delegate = nil;
     _delivery.clear();
@@ -374,6 +599,7 @@ int main(int argc, char** argv) {
             if (stressActivity) [NSProcessInfo.processInfo endActivity:stressActivity];
             application.delegate = nil;
             const auto metal = [delegate finishPresentation];
+            [delegate writeSchedulingMetrics];
             [delegate detach];
             const auto metrics = [delegate metrics];
             session.reset();
