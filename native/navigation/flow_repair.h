@@ -1,6 +1,7 @@
 #pragma once
 #include "packed_min_heap.h"
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -38,6 +39,32 @@ inline void for_flow_neighbour(int width, int height,
                       !flow_edge_open(width,edges,next,(z+dz)*width+x))) continue;
         visit(next,std::int32_t((dx&&dz)?1414:1000));
     }
+}
+
+// Topology-only derived data shared by every goal field. Building it through
+// the direct enumerator retains reciprocal edges and all diagonal side tests.
+// Bits use the same dz/dx order: NW,N,NE,W,E,SW,S,SE.
+inline std::vector<unsigned char> flow_neighbour_masks(int width,int height,
+    const std::vector<unsigned char>& grid,const std::vector<unsigned char>& edges = {}) {
+    std::vector<unsigned char> masks(grid.size(),0);
+    for(int cell=0;cell<width*height;++cell) {
+        const int x=cell%width,y=cell/width;
+        for_flow_neighbour(width,height,grid,cell,[&](int next,std::int32_t) {
+            const int raw=(next/width-y+1)*3+next%width-x+1;
+            const int bit=raw<4?raw:raw-1;
+            masks[cell]|=static_cast<unsigned char>(1U<<bit);
+        },edges);
+    }
+    return masks;
+}
+
+template<class Visit>
+inline void for_masked_flow_neighbour(int width,const std::vector<unsigned char>& masks,
+    int cell,Visit&& visit) {
+    const unsigned mask=masks[cell];
+    const std::array<int,8> offset{-width-1,-width,-width+1,-1,1,width-1,width,width+1};
+    constexpr std::array<std::int32_t,8> cost{1414,1000,1414,1000,1000,1414,1000,1414};
+    for(unsigned bit=0;bit<8;++bit)if(mask&(1U<<bit))visit(cell+offset[bit],cost[bit]);
 }
 
 // Repair an already exact distance field after a small batch of topology

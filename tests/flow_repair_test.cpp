@@ -79,6 +79,12 @@ void run() {
         check("Revision-only changes retain field addresses and perform zero repairs",cache.find(0)==retained&&cache.stats().fields_repaired==repairs&&cache.find(0)->map_revision==8);
         auto invalid=grid;invalid[3]=2;
         check("Invalid topology is rejected before mutating fields, refs or metadata",!cache.set_grid(invalid,9,error)&&cache.find(0)==retained&&cache.export_active().active_goals==metadata.active_goals&&cache.export_active().map_revision==8&&exact(cache,w,h,grid,goals));
+        // Repaired resident fields alone cannot expose a stale topology mask:
+        // a genuinely new goal must also use the final repaired generation.
+        std::vector<int> cells(grid.size());std::iota(cells.begin(),cells.end(),0);
+        std::vector<std::int32_t> sampled;require(cache.sample(40,cells,sampled,error),error);
+        compared+=grid.size();
+        check("A cold goal after exact repairs and a rejected update uses the current topology",sampled==fresh(w,h,grid,40));
     }
     {
         std::mt19937 random(902104);

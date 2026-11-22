@@ -114,6 +114,9 @@ private:
     std::uint32_t revision_ = 0;
     std::vector<unsigned char> grid_;
     std::vector<unsigned char> edges_;
+    // Rebuilt atomically with grid_/edges_. Not part of saved authority or
+    // field/LRU budgets; one byte per grid cell regardless of goal count.
+    std::vector<unsigned char> neighbour_masks_;
     std::vector<std::size_t> references_;
     std::vector<Handle> active_goals_;
     std::unordered_map<Handle, Entry> fields_;
@@ -136,10 +139,10 @@ private:
     std::uint64_t repair_relaxed_ = 0;
     unsigned last_prepare_threads_ = 1;
     unsigned last_repair_threads_ = 1;
-    static Field build_field(int width, int height,
+    static Field build_field(int width,
                              const std::vector<unsigned char>& grid,
                              std::uint32_t revision, Handle goal,
-                             const std::vector<unsigned char>& edges);
+                             const std::vector<unsigned char>& neighbour_masks);
     static std::size_t bytes(const Field& field) noexcept;
     void insert(Field field);
     std::size_t field_bytes() const noexcept;

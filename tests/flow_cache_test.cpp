@@ -1,4 +1,5 @@
 #include "navigation/flow_cache.h"
+#include "navigation/flow_repair.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -30,9 +31,25 @@ bool cross(const std::vector<unsigned char>& grid,int a,int b,int width,int heig
     if(std::abs(nx-x)>1||std::abs(nz-z)>1)return false;
     return nx==x||nz==z||(!grid[z*width+nx]&&!grid[nz*width+x]);
 }
+// Frozen direct topology checks. The oracle never reads cached masks or calls
+// either production neighbour enumerator.
+bool cross_edges(const std::vector<unsigned char>& grid,int a,int b,int width,int height,
+                 const std::vector<unsigned char>& edges) {
+    if(!cross(grid,a,b,width,height))return false;
+    if(edges.empty())return true;
+    const auto open=[&](int from,int to) {
+        const int row=to/width-from/width+1,column=to%width-from%width+1;
+        const int raw=row*3+column,bit=raw<4?raw:raw-1;
+        return (edges[from]&(1U<<bit))&&(edges[to]&(1U<<(7-bit)));
+    };
+    if(!open(a,b))return false;
+    const int x=a%width,z=a/width,nx=b%width,nz=b/width;
+    return x==nx||z==nz||(open(a,z*width+nx)&&open(a,nz*width+x)&&open(b,z*width+nx)&&open(b,nz*width+x));
+}
 // Frozen pre-cache simulation algorithm, used as a compatibility oracle. The
 // cache itself cannot provide the expected values or reference motion trace.
-std::vector<std::int32_t> legacy(const std::vector<unsigned char>& grid,int goal,int width,int height) {
+std::vector<std::int32_t> legacy(const std::vector<unsigned char>& grid,int goal,int width,int height,
+                                const std::vector<unsigned char>& edges = {}) {
     std::vector<std::int32_t> distance(width*height,-1);
     if(grid[goal])return distance;
     using Item=std::pair<int,int>;
@@ -45,7 +62,7 @@ std::vector<std::int32_t> legacy(const std::vector<unsigned char>& grid,int goal
         for(int dz=-1;dz<=1;++dz)for(int dx=-1;dx<=1;++dx){
             if((!dx&&!dz)||x+dx<0||x+dx>=width||z+dz<0||z+dz>=height)continue;
             const int next=(z+dz)*width+x+dx;
-            if(!cross(grid,cell,next,width,height))continue;
+            if(!cross_edges(grid,cell,next,width,height,edges))continue;
             const int candidate=cost+((dx&&dz)?1414:1000);
             if(distance[next]<0||candidate<distance[next]){
                 distance[next]=candidate;queue.push({candidate,next});
@@ -55,14 +72,14 @@ std::vector<std::int32_t> legacy(const std::vector<unsigned char>& grid,int goal
     return distance;
 }
 int next_cell(const std::vector<unsigned char>& grid,const std::vector<std::int32_t>& field,
-              int cell,int goal,int width,int height) {
+              int cell,int goal,int width,int height,const std::vector<unsigned char>& edges = {}) {
     if(field[cell]<=0)return cell;
     int result=cell,cost=std::numeric_limits<int>::max(),alignment=cost;
     const int x=cell%width,z=cell/width;
     for(int dz=-1;dz<=1;++dz)for(int dx=-1;dx<=1;++dx){
         if((!dx&&!dz)||x+dx<0||x+dx>=width||z+dz<0||z+dz>=height)continue;
         const int neighbour=(z+dz)*width+x+dx;
-        if(!cross(grid,cell,neighbour,width,height)||field[neighbour]<0||field[neighbour]>=field[cell])continue;
+        if(!cross_edges(grid,cell,neighbour,width,height,edges)||field[neighbour]<0||field[neighbour]>=field[cell])continue;
         const int candidate=field[neighbour]+((dx&&dz)?1414:1000);
         const int vx=neighbour%width-goal%width,vz=neighbour/width-goal/width;
         const int aim=vx*vx+vz*vz;
@@ -85,6 +102,75 @@ std::string quote(const std::string& text) {
 }
 void run() {
     std::string error;
+    {
+        constexpr int width=17,height=19;
+        auto grid=map_grid(width,height);
+        std::vector<unsigned char> edges(grid.size(),255);
+        std::mt19937 random(61307);
+        for(auto& edge:edges)if(random()%5==0)edge&=static_cast<unsigned char>(~(1U<<(random()%8)));
+        edges[4*width+8]|=1U<<4;edges[4*width+9]|=1U<<3;
+        const std::vector<int> goals{0,1,16,71,161,322};
+        const auto masks=coastal::navigation::detail::flow_neighbour_masks(width,height,grid,edges);
+        bool same_order=masks.size()==grid.size();
+        for(int cell=0;cell<width*height;++cell) {
+            std::vector<std::pair<int,std::int32_t>> actual,expected;
+            coastal::navigation::detail::for_masked_flow_neighbour(width,masks,cell,[&](int next,std::int32_t cost){actual.emplace_back(next,cost);});
+            const int x=cell%width,y=cell/width;
+            for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                const int nx=x+dx,ny=y+dy;if((!dx&&!dy)||nx<0||nx>=width||ny<0||ny>=height)continue;
+                const int next=ny*width+nx;
+                if(cross_edges(grid,cell,next,width,height,edges))expected.emplace_back(next,(dx&&dy)?1414:1000);
+            }
+            same_order=same_order&&actual==expected;
+        }
+        check("Topology masks preserve the frozen direct eight-neighbour order and weights at every cell",same_order);
+        FlowCache cache;
+        require(cache.configure(width,height,grid,10,error,edges),error);
+        require(cache.set_active(goals,error),error);require(cache.prepare_active(error,4),error);
+        const auto same=[&](FlowCache& tested) {
+            for(const auto goal:goals) {
+                const auto expected=legacy(grid,goal,width,height,edges);
+                const auto* field=tested.find(goal);if(!field||field->distance!=expected)return false;
+                // Compare whole routes through the frozen direct rules,
+                // including unreachable starts, corner edges and exact ties.
+                for(int start=0;start<width*height;++start) {
+                    int actual=start,reference=start;
+                    for(int step=0;step<width*height;++step) {
+                        const auto next=next_cell(grid,field->distance,actual,goal,width,height,edges);
+                        const auto oracle=next_cell(grid,expected,reference,goal,width,height,edges);
+                        if(next!=oracle)return false;
+                        if(next==actual)break;
+                        actual=next;reference=oracle;
+                    }
+                }
+            }return true;
+        };
+        check("Cached topology matches frozen direct fields and complete routes on non-square reciprocal-edge grids",same(cache));
+        const auto built=cache.stats().fields_built;const auto* retained=cache.find(goals.front());
+        require(cache.set_grid(grid,11,error,edges),error);
+        check("Revision-only changes preserve exact cached topology and field addresses",cache.find(goals.front())==retained&&cache.stats().fields_built==built&&same(cache));
+        // Change only one endpoint: reciprocal legality must be recomputed,
+        // including the two diagonals depending on this cardinal edge.
+        edges[4*width+8]^=1U<<4;
+        require(cache.set_grid(grid,12,error,edges),error);
+        require(cache.prepare_active(error,4),error);
+        check("Edge-only topology changes invalidate old masks without a blocked-cell change",same(cache));
+        auto invalid_edges=edges;invalid_edges.pop_back();retained=cache.find(goals.front());
+        check("Rejected edge topology leaves the previously published masks and fields intact",!cache.set_grid(grid,13,error,invalid_edges)&&cache.find(goals.front())==retained&&cache.export_active().map_revision==12&&same(cache));
+        const auto metadata=cache.export_active();FlowCache restored;
+        require(restored.restore_active(metadata,grid,goals,error,edges),error);require(restored.prepare_active(error,4),error);
+        check("Restore regenerates topology masks without adding serialized authority",same(restored)&&restored.export_active().active_goals==metadata.active_goals);
+        // Reconfigure the same object to a different stride, then back: no
+        // cached offset may survive the dimensions or topology generation.
+        require(cache.configure(8,11,std::vector<unsigned char>(88,0),20,error),error);
+        std::vector<std::int32_t> sampled;require(cache.sample(87,{0,7,80,87},sampled,error),error);
+        const auto fresh=legacy(std::vector<unsigned char>(88,0),87,8,11);
+        check("Reconfigure rebuilds exact topology for a changed row stride",sampled==std::vector<std::int32_t>({fresh[0],fresh[7],fresh[80],fresh[87]}));
+        require(cache.configure(width,height,grid,21,error,edges),error);require(cache.set_active(goals,error),error);require(cache.prepare_active(error,4),error);
+        cache.set_inactive_budget(0);require(cache.set_active({},error),error);
+        require(cache.set_active(goals,error),error);require(cache.prepare_active(error,4),error);
+        check("Clearing all distance fields retains usable exact topology for subsequent cold goals",same(cache));
+    }
     {
         FlowCache cache;
         auto grid=map_grid(17,19);
