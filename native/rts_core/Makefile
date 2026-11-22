@@ -58,3 +58,9 @@ rts-ai-bench: $(rts_obj)/ai_bench $(rts_obj)/fixture.stamp
 
 $(rts_obj)/ai_bench: tests/rts_ai_bench.cpp $(rts_lib) build/libnavigation.a $(rts_headers) | $(rts_obj)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -O2 -Wall -Wextra -Wpedantic $< $(rts_lib) build/libnavigation.a -o $@
+
+.PHONY: rts-worker-dispatch-bench
+rts-worker-dispatch-bench: $(rts_obj)/worker_pool_dispatch_bench
+
+$(rts_obj)/worker_pool_dispatch_bench: tests/rts_worker_pool_dispatch_bench.cpp $(rts_obj)/worker_pool.o $(rts_headers) native/profiling/thread_observation.h | $(rts_obj)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -O2 -Wall -Wextra -Wpedantic $< $(rts_obj)/worker_pool.o -o $@
