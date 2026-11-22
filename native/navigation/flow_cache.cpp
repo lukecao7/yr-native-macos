@@ -47,6 +47,7 @@ bool FlowCache::configure(int width, int height,
         candidate.width_=width; candidate.height_=height;
         candidate.grid_=grid; candidate.revision_=revision;
         candidate.edges_=edges;
+        candidate.neighbour_masks_=detail::flow_neighbour_masks(width,height,candidate.grid_,candidate.edges_);
         candidate.references_.assign(grid.size(),0);
         *this=std::move(candidate);
         return true;
@@ -77,6 +78,7 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
     try {
         auto replacement=grid; // Complete allocation before invalidation.
         auto replacement_edges=edges;
+        auto replacement_masks=detail::flow_neighbour_masks(width_,height_,replacement,replacement_edges);
         std::vector<int> changed;
         for (std::size_t i=0;i<grid.size();++i) if (grid[i]!=grid_[i]) changed.push_back(int(i));
         // Repair retains old arrays until every candidate is ready. Rebuild
@@ -126,7 +128,7 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
             for (const auto& failure:failures) if (failure) std::rethrow_exception(failure);
             // All allocations/worker work succeeded. Publish only by noexcept
             // swaps, retaining stable handles, entry addresses, pins and LRU.
-            grid_.swap(replacement);revision_=revision;++invalidations_;
+            grid_.swap(replacement);neighbour_masks_.swap(replacement_masks);revision_=revision;++invalidations_;
             for (std::size_t i=0;i<goals.size();++i) {
                 auto& entry=fields_.at(goals[i]);
                 const auto before=bytes(entry.field),after=bytes(candidates[i]);
@@ -138,7 +140,7 @@ bool FlowCache::set_grid(const std::vector<unsigned char>& grid,
             peak_bytes_=std::max(peak_bytes_,resident_bytes_);last_repair_threads_=threads;
             return true;
         }
-        grid_.swap(replacement); edges_.swap(replacement_edges); revision_=revision; ++invalidations_;
+        grid_.swap(replacement); edges_.swap(replacement_edges);neighbour_masks_.swap(replacement_masks);revision_=revision; ++invalidations_;
         fields_.clear(); inactive_lru_.clear();
         resident_bytes_=inactive_bytes_=0;
         last_repair_threads_ = 1;
@@ -226,10 +228,10 @@ bool FlowCache::set_active(const std::vector<Handle>& references,
     }
 }
 
-FlowCache::Field FlowCache::build_field(int width, int height,
+FlowCache::Field FlowCache::build_field(int width,
                                       const std::vector<unsigned char>& grid,
                                       std::uint32_t revision, Handle goal,
-                                      const std::vector<unsigned char>& edges) {
+                                      const std::vector<unsigned char>& neighbour_masks) {
     Field result; result.goal=goal; result.map_revision=revision;
     result.distance = std::vector<std::int32_t>(grid.size(), -1);
     if (grid[goal]) return result;
@@ -240,12 +242,12 @@ FlowCache::Field FlowCache::build_field(int width, int height,
         const auto distance=item.first;
         const auto cell=item.second;
         if (distance!=result.distance[cell]) continue;
-        detail::for_flow_neighbour(width,height,grid,cell,[&](int next,std::int32_t edge) {
+        detail::for_masked_flow_neighbour(width,neighbour_masks,cell,[&](int next,std::int32_t edge) {
             const std::int32_t candidate=distance+edge;
             if (result.distance[next]<0 || candidate<result.distance[next]) {
                 result.distance[next]=candidate; queue.emplace(candidate,next);
             }
-        },edges);
+        });
     }
     return result;
 }
@@ -311,7 +313,7 @@ bool FlowCache::prepare_active(std::string& error, unsigned requested_threads) {
                 for (;;) {
                     const std::size_t i=next_index.fetch_add(1,std::memory_order_relaxed);
                     if (i>=missing.size()) break;
-                    built[i]=build_field(width_,height_,grid_,revision_,missing[i],edges_);
+                    built[i]=build_field(width_,grid_,revision_,missing[i],neighbour_masks_);
                 }
             } catch (...) {failures[worker]=std::current_exception();}
         };
@@ -370,7 +372,7 @@ bool FlowCache::sample(Handle handle, const std::vector<int>& cells,
                 else evict_inactive();
             }
             record_reserved(needed);
-            Field field=build_field(width_,height_,grid_,revision_,handle,edges_);
+            Field field=build_field(width_,grid_,revision_,handle,neighbour_masks_);
             ++builds_;
             for (int cell:cells) values.push_back(field.distance[cell]);
             // With no inactive capacity a cold diagnostic query is temporary.

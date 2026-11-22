@@ -31,5 +31,12 @@ check:
 test: $(test_bins)
 	@set -e; for program in $(test_bins); do ./$$program; done
 
+.PHONY: navigation-bench
+build/navigation_neighbour_bench: tests/navigation_neighbour_bench.cpp build/libnavigation.a $(headers) | build
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(navigation_flags) $< build/libnavigation.a -o $@
+
+navigation-bench: build/navigation_neighbour_bench
+	./$< --label=neighbour-mask --threads=8 --rounds=3
+
 include native/rts_core/Makefile
 include native/macos_host/Makefile
