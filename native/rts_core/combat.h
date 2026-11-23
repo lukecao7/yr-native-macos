@@ -7,6 +7,8 @@
 #include "worker_pool.h"
 #include "world.h"
 
+#include <array>
+#include <cstddef>
 #include <span>
 
 namespace coastal::rts {
@@ -16,6 +18,18 @@ struct StepWork {
     unsigned engaged = 0; // Has an enemy in weapon range.
     unsigned fired = 0;
     unsigned active = 0; // Unique entities that moved or engaged this step.
+};
+
+// Derived physical source/tail occupancy. This is a destination-cell filter,
+// separate from static topology. no_entity means an unknown owner and blocks
+// every mover; repeated equal owners may share one cell without conflict.
+struct MobileOccupant {
+    Cell cell;
+    EntityId owner = no_entity;
+    // Admission remains blocked even when a settled body permits an adjacent
+    // Move to complete. Producers may clear this only after physical motion
+    // and body turning have settled. Unknown producers default to waiting.
+    bool blocks_completion = true;
 };
 
 class Navigator {
@@ -38,11 +52,47 @@ public:
     void set_obstacle_mask(std::span<const std::uint8_t>);
     // Queries the last prepared grid. A masked goal without a world entity
     // can be approached, but its Move order waits until the mask is cleared.
-    std::optional<Cell> next(const World& world, Cell from, Cell goal);
+    std::optional<Cell> next(const World& world, Cell from, Cell goal,
+                             EntityId owner = no_entity);
+
+    // Replaces the complete transient snapshot with an owned copy. Empty
+    // clears it. prepare(world) publishes it before queries/worker dispatch.
+    // Transient cells only filter move destinations, never FlowCache topology
+    // or diagonal side cells. Distinct owners sharing a cell block all movers;
+    // a unique known owner can ignore its own entry. Owner-thread staging and
+    // prepare must not overlap worker reads. Entries must be inside the map.
+    void set_transient_occupancy(std::span<const MobileOccupant>);
+    bool transient_occupied(Cell cell, EntityId ignore = no_entity) const noexcept;
+    // Shared owner/worker predicate over the last prepared snapshot. The
+    // caller supplies live World-body occupancy, never a terrain-only mask.
+    // A Move may finish at its goal, or adjacent to an occupied goal, only
+    // when every entry there has settled. Own entries count for completion;
+    // unknown/multiple owners remain conservative even if their flags clear.
+    // This query allocates nothing and never changes the World or FlowCache.
+    bool can_finish_move(Cell from, Cell goal, bool goal_has_body) const noexcept;
+
+    // Owner-thread query over the last prepared static grid. Returns all
+    // downhill route steps in next()'s stable cost order, ignoring mobile
+    // and transient occupancy. Terrain, obstacle/building blockers, imported
+    // travel edges and static diagonal side cells retain normal constraints.
+    // The world is unchanged; cold goals may populate the shared FlowCache.
+    // Call prepare(world) after any topology change and outside worker reads.
+    // Only out[0..returned_count) is written; the count is at most out.size().
+    std::size_t ranked_static_steps(const World& world, Cell from, Cell goal,
+                                    std::array<Cell, 8>& out);
 
 private:
     friend void tick_combat(World& world, Navigator& navigator);
+    struct TransientCell {
+        EntityId owner = no_entity;
+        bool blocked_for_all = false;
+        bool blocks_completion = false;
+    };
+    void prepare_transient(const Map& map);
     navigation::FlowCache cache_;
+    std::vector<MobileOccupant> transient_occupants_;
+    std::vector<TransientCell> transient_cells_;
+    std::vector<int> transient_touched_;
     std::vector<unsigned char> blocked_;
     std::vector<unsigned char> edges_;
     std::vector<std::uint8_t> obstacle_mask_;

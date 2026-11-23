@@ -195,7 +195,7 @@ bool sample_route(navigation::FlowCache& cache, int handle, std::span<const int>
 
 template<class Occupied>
 Intent plan_unit(const World& world, const FlowGrid& grid, const SpatialIndex& spatial,
-                 const Entity& unit, const Occupied& occupied) {
+                 const Entity& unit, const Occupied& occupied, const Navigator& navigator) {
     Intent intent;
     const auto& spec = world.rules.spec(unit.kind);
     Cell goal = unit.destination;
@@ -223,12 +223,15 @@ Intent plan_unit(const World& world, const FlowGrid& grid, const SpatialIndex& s
         unit.order == OrderKind::Idle) return intent;
 
     if (unit.order != OrderKind::Gather && goal == unit.destination &&
-        (unit.position == goal ||
-         (unit.order == OrderKind::Move && grid_distance(unit.position, goal) == 1 && occupied(goal)))) {
+        (unit.position == goal || unit.order == OrderKind::Move) &&
+        navigator.can_finish_move(unit.position, goal, occupied(goal))) {
         intent.finish_move = true;
         return intent;
     }
-    intent.goals = route_targets(grid, unit.position, goal, occupied);
+    const auto destination_occupied = [&](Cell cell) {
+        return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+    };
+    intent.goals = route_targets(grid, unit.position, goal, destination_occupied);
     return intent;
 }
 
@@ -296,7 +299,7 @@ void prepare_routes(navigation::FlowCache& cache, const std::vector<Intent>& int
 }
 
 void commit_intents(World& world, const std::vector<Intent>& intents,
-                    SpatialIndex& spatial, StepWork& work) {
+                    SpatialIndex& spatial, StepWork& work, const Navigator& navigator) {
     for (std::size_t i = 0; i < intents.size(); ++i) {
         auto& unit = world.entities[i];
         const auto& intent = intents[i];
@@ -317,6 +320,7 @@ void commit_intents(World& world, const std::vector<Intent>& intents,
         }
         for (std::size_t candidate = 0; candidate < intent.moves.count; ++candidate) {
             const auto step = intent.moves.cells[candidate];
+            if (navigator.transient_occupied(step, unit.id)) continue;
             if (!spatial.claim(step, static_cast<int>(i))) continue;
             unit.facing = direction(unit.position, step);
             unit.position = step;
@@ -340,6 +344,45 @@ void Navigator::set_obstacle_mask(std::span<const std::uint8_t> mask) {
     obstacle_mask_.assign(mask.begin(),mask.end());
 }
 
+void Navigator::set_transient_occupancy(std::span<const MobileOccupant> occupants) {
+    transient_occupants_.assign(occupants.begin(), occupants.end());
+}
+
+void Navigator::prepare_transient(const Map& map) {
+    if (transient_cells_.size() != map.tiles.size()) {
+        transient_cells_.assign(map.tiles.size(), {});
+    } else {
+        for (const int index : transient_touched_) transient_cells_[index] = {};
+    }
+    transient_touched_.clear();
+    for (const auto& occupant : transient_occupants_) {
+        const int index = map.index(occupant.cell);
+        auto& cell = transient_cells_[index];
+        if (cell.owner == no_entity && !cell.blocked_for_all) transient_touched_.push_back(index);
+        cell.blocks_completion = cell.blocks_completion || occupant.blocks_completion;
+        if (occupant.owner == no_entity) cell.blocked_for_all = true;
+        else if (cell.owner == no_entity && !cell.blocked_for_all) cell.owner = occupant.owner;
+        else if (cell.owner != occupant.owner) cell.blocked_for_all = true;
+    }
+}
+
+bool Navigator::transient_occupied(Cell cell, EntityId ignore) const noexcept {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_ ||
+        transient_cells_.empty()) return false;
+    const auto& occupancy = transient_cells_[cell.y * width_ + cell.x];
+    return occupancy.blocked_for_all || (occupancy.owner != no_entity && occupancy.owner != ignore);
+}
+
+bool Navigator::can_finish_move(Cell from, Cell goal, bool goal_has_body) const noexcept {
+    const auto contains = [&](Cell cell) {
+        return cell.x >= 0 && cell.y >= 0 && cell.x < width_ && cell.y < height_;
+    };
+    if (!contains(from) || !contains(goal) || transient_cells_.empty()) return false;
+    if (from != goal && (!goal_has_body || grid_distance(from, goal) != 1)) return false;
+    const auto& occupancy = transient_cells_[goal.y * width_ + goal.x];
+    return !occupancy.blocked_for_all && !occupancy.blocks_completion;
+}
+
 void Navigator::prepare(const World& world) {
     const Map& map = world.map;
     if (map.width <= 0 || map.height <= 0 ||
@@ -348,6 +391,10 @@ void Navigator::prepare(const World& world) {
         (!map.travel_edges.empty() && map.travel_edges.size()!=map.tiles.size()) ||
         (!obstacle_mask_.empty() && obstacle_mask_.size()!=map.tiles.size())) {
         throw std::invalid_argument("The navigation map does not match its dimensions.");
+    }
+    if (std::any_of(transient_occupants_.begin(), transient_occupants_.end(),
+                    [&](const MobileOccupant& occupant) { return !map.contains(occupant.cell); })) {
+        throw std::invalid_argument("A transient navigation occupant lies outside the map.");
     }
 
     // Smaller game maps use a blocked rim so the shared FlowCache can keep its
@@ -381,7 +428,10 @@ void Navigator::prepare(const World& world) {
             std::copy_n(map.travel_edges.begin()+y*map.width,map.width,edges.begin()+y*flow_width);
     }
     const bool size_changed = width_ != map.width || height_ != map.height;
-    if (!size_changed && blocked == blocked_ && edges==edges_) return;
+    if (!size_changed && blocked == blocked_ && edges==edges_) {
+        prepare_transient(map);
+        return;
+    }
     std::string error;
     const auto revision = revision_ + 1;
     const bool updated = size_changed ? cache_.configure(flow_width, flow_height, blocked, revision, error,edges)
@@ -392,15 +442,18 @@ void Navigator::prepare(const World& world) {
     revision_ = revision;
     blocked_ = std::move(blocked);
     edges_ = std::move(edges);
+    prepare_transient(map);
 }
 
-std::optional<Cell> Navigator::next(const World& world, Cell from, Cell goal) {
+std::optional<Cell> Navigator::next(const World& world, Cell from, Cell goal, EntityId owner) {
     const Map& map = world.map;
     if (blocked_.empty() || map.width != width_ || map.height != height_) return std::nullopt;
 
     const FlowGrid grid{map, blocked_, std::max(minimum_flow_extent, width_),
                         std::max(minimum_flow_extent, height_)};
-    const auto occupied = [&](Cell cell) { return !world.free_at(cell); };
+    const auto occupied = [&](Cell cell) {
+        return !world.free_at(cell) || transient_occupied(cell, owner);
+    };
     const auto routes = route_targets(grid, from, goal, occupied);
     const auto choices = rank_moves(grid, from, routes, occupied,
         [&](int handle, std::span<const int> cells, auto& values) {
@@ -408,6 +461,23 @@ std::optional<Cell> Navigator::next(const World& world, Cell from, Cell goal) {
         });
     if (!choices.count) return std::nullopt;
     return choices.cells[0];
+}
+
+std::size_t Navigator::ranked_static_steps(const World& world, Cell from, Cell goal,
+                                          std::array<Cell, 8>& out) {
+    const Map& map = world.map;
+    if (blocked_.empty() || map.width != width_ || map.height != height_) return 0;
+
+    const FlowGrid grid{map, blocked_, std::max(minimum_flow_extent, width_),
+                        std::max(minimum_flow_extent, height_)};
+    const auto mobile_occupied = [](Cell) { return false; };
+    const auto routes = route_targets(grid, from, goal, mobile_occupied);
+    const auto choices = rank_moves(grid, from, routes, mobile_occupied,
+        [&](int handle, std::span<const int> cells, auto& values) {
+            return sample_route(cache_, handle, cells, values);
+        });
+    std::copy_n(choices.cells.begin(), choices.count, out.begin());
+    return choices.count;
 }
 
 bool apply_combat(World& world, const Command& command) {
@@ -483,7 +553,10 @@ void tick_combat(World& world, Navigator& navigator) {
     const auto lanes = static_cast<unsigned>(std::min<std::size_t>(navigator.workers_.count(), intents.size()));
     const auto& prepared_cache = std::as_const(navigator.cache_);
     const auto evaluate_move = [&](Intent& intent, const Entity& unit) {
-        intent.moves = rank_moves(grid, unit.position, intent.goals, occupied,
+        const auto destination_occupied = [&](Cell cell) {
+            return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+        };
+        intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied,
             [&](int handle, std::span<const int> cells, auto& values) {
                 return sample_field(prepared_cache, handle, cells, values);
             });
@@ -494,7 +567,7 @@ void tick_combat(World& world, Navigator& navigator) {
             for (std::size_t i = begin; i < end; ++i) {
                 const auto& unit = snapshot.entities[i];
                 auto& intent = intents[i];
-                intent = plan_unit(snapshot, grid, navigator.spatial_, unit, occupied);
+                intent = plan_unit(snapshot, grid, navigator.spatial_, unit, occupied, navigator);
                 if (intent.goals.count) evaluate_move(intent, unit);
             }
             // Split the region that contains visibility, then clear and fill
@@ -527,13 +600,17 @@ void tick_combat(World& world, Navigator& navigator) {
     for (std::size_t i = 0; i < intents.size(); ++i) {
         auto& intent = intents[i];
         if (!intent.moves.incomplete) continue;
-        intent.moves = rank_moves(grid, snapshot.entities[i].position, intent.goals, occupied,
+        const auto& unit = snapshot.entities[i];
+        const auto destination_occupied = [&](Cell cell) {
+            return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+        };
+        intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied,
             [&](int handle, std::span<const int> cells, auto& values) {
                 return sample_route(navigator.cache_, handle, cells, values);
             });
     }
     profiling::Scope commit(navigator.profile_, Phase::Commit);
-    commit_intents(world, intents, navigator.spatial_, navigator.work_);
+    commit_intents(world, intents, navigator.spatial_, navigator.work_, navigator);
     navigator.profile_.add(profiling::Counter::Ticks);
     navigator.profile_.add(profiling::Counter::LivingCalculated, intents.size());
     navigator.profile_.add(profiling::Counter::NewLaunches, navigator.work_.fired);
