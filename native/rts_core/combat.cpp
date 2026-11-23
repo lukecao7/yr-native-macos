@@ -82,6 +82,44 @@ struct FlowGrid {
     Cell cell(int index) const noexcept { return {index % width, index / width}; }
 };
 
+// An actual closed dependency cycle is distinct from congestion at a shared
+// future goal. Every node must have a live ordinary Move to the adjacent real
+// body of the next node; a settled/terminal actor, remote goal, source-only
+// tail, static blocker, or path entering another cycle terminates this query.
+// Only the lowest stable ID in that same cycle may take an equal-field step.
+// The canonical destination remains unchanged, so once its old source clears
+// the other nodes can follow their original commands. No retry/history state
+// or generic off-gradient wandering is introduced.
+bool leads_closed_goal_cycle(const World& world, const FlowGrid& grid, const Entity& requester,
+                             const Navigator& navigator) {
+    const auto advance = [&](const Entity* node) -> const Entity* {
+        if (!node || !node->hp || node->side != requester.side || node->order != OrderKind::Move ||
+            !world.rules.spec(node->kind).move_period || node->move_wait ||
+            navigator.transient_owner_moving(node->id) ||
+            node->position == node->destination || grid_distance(node->position, node->destination) != 1 ||
+            !grid.map.contains(node->position) || !grid.map.contains(node->destination) ||
+            grid.blocked[grid.index(node->position)] || grid.blocked[grid.index(node->destination)] ||
+            !grid.map.can_travel(node->position, node->destination)) return nullptr;
+        const auto* next = world.find(navigator.prepared_body_owner(node->destination));
+        return next && next->hp && next->position == node->destination ? next : nullptr;
+    };
+    const Entity* node = &requester;
+    const Entity* slow = &requester;
+    const Entity* fast = &requester;
+    // Floyd detects entry into someone else's cycle without an allocated or
+    // quadratically searched visited list. Prepared body lookup is O(1), and
+    // the existing stable-ID World::find is used to validate each live owner.
+    for (std::size_t count = 0; count < world.entities.size(); ++count) {
+        node = advance(node);
+        if (!node || node->id < requester.id) return false;
+        if (node->id == requester.id) return count > 0;
+        slow = advance(slow);
+        fast = advance(advance(fast));
+        if (!slow || !fast || slow->id == fast->id) return false;
+    }
+    return false;
+}
+
 struct RouteTargets {
     std::array<int, 8> handles{};
     std::size_t count = 0;
@@ -144,7 +182,8 @@ RouteTargets route_targets(const FlowGrid& grid, Cell from, Cell goal, const Occ
 
 template<class Occupied, class Sample, class Crossed>
 MoveChoices rank_moves(const FlowGrid& grid, Cell from, const RouteTargets& targets,
-                       const Occupied& occupied, const Sample& sample, const Crossed& crossed) {
+                       const Occupied& occupied, const Sample& sample, const Crossed& crossed,
+                       bool allow_equal = false) {
     MoveChoices choices;
     if (!targets.count) return choices;
 
@@ -175,7 +214,7 @@ MoveChoices rank_moves(const FlowGrid& grid, Cell from, const RouteTargets& targ
         if (values[0] == 0) return {};
         if (values[0] < 0) continue;
         for (std::size_t i = 1; i < count; ++i) {
-            if (values[i] >= 0 && values[i] < values[0]) {
+            if (values[i] >= 0 && (values[i] < values[0] || (allow_equal && values[i] == values[0]))) {
                 costs[i] = std::min(costs[i], edge_costs[i] + values[i]);
             }
         }
@@ -378,6 +417,32 @@ void Navigator::set_transient_segments(std::span<const MobileSegment> segments) 
     transient_segments_.assign(segments.begin(), segments.end());
 }
 
+bool Navigator::transient_owner_moving(EntityId owner) const noexcept {
+    return owner != no_entity && std::binary_search(transient_active_owners_.begin(),
+                                                    transient_active_owners_.end(), owner);
+}
+
+void Navigator::prepare_bodies(const World& world) {
+    const auto& map = world.map;
+    if (body_cells_.size() != map.tiles.size()) body_cells_.assign(map.tiles.size(), {});
+    else for (const int index : body_touched_) body_cells_[index] = {};
+    body_touched_.clear();
+    for (const auto& body : world.entities) if (body.hp && map.contains(body.position)) {
+        const int index = map.index(body.position);
+        auto& cell = body_cells_[index];
+        if (cell.owner == no_entity && !cell.ambiguous) body_touched_.push_back(index);
+        if (body.id == no_entity || cell.owner != no_entity || cell.ambiguous) cell.ambiguous = true;
+        else cell.owner = body.id;
+    }
+}
+
+EntityId Navigator::prepared_body_owner(Cell cell) const noexcept {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_ || body_cells_.empty())
+        return no_entity;
+    const auto& body = body_cells_[cell.y * width_ + cell.x];
+    return body.ambiguous ? no_entity : body.owner;
+}
+
 void Navigator::set_prepared_move_steps(std::span<const PreparedMoveStep> rows) {
     prepared_move_steps_.assign(rows.begin(), rows.end());
     std::stable_sort(prepared_move_steps_.begin(), prepared_move_steps_.end(),
@@ -429,6 +494,17 @@ void Navigator::prepare_transient(const Map& map) {
         else if (owner == no_entity && !blocked) owner = segment.owner;
         else if (owner != segment.owner) blocked = true;
     }
+    // Publish ownership at the same successful prepare boundary as geometric
+    // segment crossings. Staging or rejecting a new segment list leaves the
+    // last prepared owner snapshot intact for every owner/worker query.
+    transient_active_owners_.clear();
+    transient_active_owners_.reserve(transient_segments_.size());
+    for (const auto& segment : transient_segments_)
+        if (segment.owner != no_entity) transient_active_owners_.push_back(segment.owner);
+    if (!std::is_sorted(transient_active_owners_.begin(), transient_active_owners_.end()))
+        std::sort(transient_active_owners_.begin(), transient_active_owners_.end());
+    transient_active_owners_.erase(std::unique(transient_active_owners_.begin(), transient_active_owners_.end()),
+                                   transient_active_owners_.end());
 }
 
 bool Navigator::transient_crossed(Cell from, Cell to, EntityId ignore) const noexcept {
@@ -488,6 +564,7 @@ void Navigator::prepare(const World& world) {
         throw std::invalid_argument("A prepared navigation step has no owner or lies outside the map.");
     }
 
+    prepare_bodies(world);
     // Smaller game maps use a blocked rim so the shared FlowCache can keep its
     // existing supported dimensions. World coordinates still use the real map.
     const int flow_width = std::max(minimum_flow_extent, map.width);
@@ -546,12 +623,19 @@ std::optional<Cell> Navigator::next(const World& world, Cell from, Cell goal, En
         return !world.free_at(cell) || transient_occupied(cell, owner);
     };
     const auto routes = route_targets(grid, from, goal, occupied);
-    const auto choices = rank_moves(grid, from, routes, occupied,
-        [&](int handle, std::span<const int> cells, auto& values) {
-            return sample_route(cache_, handle, cells, values);
-        }, [&](Cell a, Cell b) {
-            return transient_crossed(a, b, owner) || !prepared_step_allowed(owner, b);
-        });
+    const auto sample = [&](int handle, std::span<const int> cells, auto& values) {
+        return sample_route(cache_, handle, cells, values);
+    };
+    const auto crossed = [&](Cell a, Cell b) {
+        return transient_crossed(a, b, owner) || !prepared_step_allowed(owner, b);
+    };
+    auto choices = rank_moves(grid, from, routes, occupied, sample, crossed);
+    if (!choices.count && !choices.incomplete) {
+        const auto* requester = world.find(owner);
+        if (requester && requester->position == from && requester->destination == goal &&
+            leads_closed_goal_cycle(world, grid, *requester, *this))
+            choices = rank_moves(grid, from, routes, occupied, sample, crossed, true);
+    }
     if (!choices.count) return std::nullopt;
     return choices.cells[0];
 }
@@ -649,12 +733,15 @@ void tick_combat(World& world, Navigator& navigator) {
         const auto destination_occupied = [&](Cell cell) {
             return occupied(cell) || navigator.transient_occupied(cell, unit.id);
         };
-        intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied,
-            [&](int handle, std::span<const int> cells, auto& values) {
-                return sample_field(prepared_cache, handle, cells, values);
-            }, [&](Cell a, Cell b) {
-                return navigator.transient_crossed(a, b, unit.id) || !navigator.prepared_step_allowed(unit.id, b);
-            });
+        const auto sample = [&](int handle, std::span<const int> cells, auto& values) {
+            return sample_field(prepared_cache, handle, cells, values);
+        };
+        const auto crossed = [&](Cell a, Cell b) {
+            return navigator.transient_crossed(a, b, unit.id) || !navigator.prepared_step_allowed(unit.id, b);
+        };
+        intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied, sample, crossed);
+        if (!intent.moves.count && !intent.moves.incomplete && leads_closed_goal_cycle(snapshot, grid, unit, navigator))
+            intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied, sample, crossed, true);
     };
     {
         profiling::Scope workers(navigator.profile_, Phase::WorkersWall);
@@ -699,12 +786,15 @@ void tick_combat(World& world, Navigator& navigator) {
         const auto destination_occupied = [&](Cell cell) {
             return occupied(cell) || navigator.transient_occupied(cell, unit.id);
         };
-        intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied,
-            [&](int handle, std::span<const int> cells, auto& values) {
-                return sample_route(navigator.cache_, handle, cells, values);
-            }, [&](Cell a, Cell b) {
-                return navigator.transient_crossed(a, b, unit.id) || !navigator.prepared_step_allowed(unit.id, b);
-            });
+        const auto sample = [&](int handle, std::span<const int> cells, auto& values) {
+            return sample_route(navigator.cache_, handle, cells, values);
+        };
+        const auto crossed = [&](Cell a, Cell b) {
+            return navigator.transient_crossed(a, b, unit.id) || !navigator.prepared_step_allowed(unit.id, b);
+        };
+        intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied, sample, crossed);
+        if (!intent.moves.count && !intent.moves.incomplete && leads_closed_goal_cycle(snapshot, grid, unit, navigator))
+            intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied, sample, crossed, true);
     }
     profiling::Scope commit(navigator.profile_, Phase::Commit);
     commit_intents(world, intents, navigator.spatial_, navigator.work_, navigator);
