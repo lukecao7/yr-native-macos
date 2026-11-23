@@ -32,6 +32,22 @@ struct MobileOccupant {
     bool blocks_completion = true;
 };
 
+// Derived active one-cell centre segment. It keeps a moving owner's whole
+// source-to-next diagonal exclusive until physical interpolation ends. It is
+// separate from cell admission and from static topology; no save field is added.
+struct MobileSegment {
+    Cell from;
+    Cell to;
+    EntityId owner = no_entity;
+};
+
+// One prepare's actual non-turret PrimaryFacing choice. Empty next means
+// no movement was prepared. This derives from live motion and is never saved.
+struct PreparedMoveStep {
+    EntityId owner = no_entity;
+    std::optional<Cell> next;
+};
+
 class Navigator {
 public:
     explicit Navigator(unsigned threads = 1, bool measure = false);
@@ -63,6 +79,17 @@ public:
     // prepare must not overlap worker reads. Entries must be inside the map.
     void set_transient_occupancy(std::span<const MobileOccupant>);
     bool transient_occupied(Cell cell, EntityId ignore = no_entity) const noexcept;
+    // Replaces derived active segments. prepare() validates one-cell adjacent
+    // endpoints and publishes them. Only strict interior line crossings are
+    // blocked; mobile side cells retain ordinary side-around semantics.
+    void set_transient_segments(std::span<const MobileSegment>);
+    bool transient_crossed(Cell from, Cell to, EntityId ignore = no_entity) const noexcept;
+    // Owner stages the actual next step prepared by an external body-turn
+    // controller. Unlisted actors keep all ranked alternatives; listed actors
+    // may commit only that next step. Empty next admits none. Re-derived each
+    // preparation; prepare() validates it before shared worker reads.
+    void set_prepared_move_steps(std::span<const PreparedMoveStep>);
+    bool prepared_step_allowed(EntityId owner, Cell next) const noexcept;
     // Shared owner/worker predicate over the last prepared snapshot. The
     // caller supplies live World-body occupancy, never a terrain-only mask.
     // A Move may finish at its goal, or adjacent to an occupied goal, only
@@ -88,11 +115,19 @@ private:
         bool blocked_for_all = false;
         bool blocks_completion = false;
     };
+    struct SegmentCell {
+        std::array<EntityId, 2> owner{};
+        std::array<bool, 2> blocked_for_all{};
+    };
     void prepare_transient(const Map& map);
     navigation::FlowCache cache_;
     std::vector<MobileOccupant> transient_occupants_;
     std::vector<TransientCell> transient_cells_;
     std::vector<int> transient_touched_;
+    std::vector<MobileSegment> transient_segments_;
+    std::vector<SegmentCell> transient_segment_cells_;
+    std::vector<int> transient_segment_touched_;
+    std::vector<PreparedMoveStep> prepared_move_steps_;
     std::vector<unsigned char> blocked_;
     std::vector<unsigned char> edges_;
     std::vector<std::uint8_t> obstacle_mask_;

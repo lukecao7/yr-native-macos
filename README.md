@@ -126,6 +126,14 @@ make -j4 build/rts_core/worker_pool_test rts-worker-dispatch-bench
 
 setter 先保存数据；下一次 `World::tick` 会更新距离场。手动调用 `next` 前须先调用 `prepare(world)`，尺寸错误也在 `prepare` 时报告。掩码由接入方保存，读档后应重新传入。若移动目标仅被这一层阻挡，单位会接近并等待；解除阻挡后才能进入目标格并结束移动命令。
 
+## 动态移动段与外部已准备步
+
+接入方可在导航 owner 线程调用 `Navigator::set_transient_segments`，传入仍在插值的单格移动段及其 owner，并配合 `set_transient_occupancy` 提供实际车体、起点尾部与下一格占用。每轮替换完整快照，移动结束后传入空数组或剩余段；在 `next()` 或工作线程读取前调用 `prepare(world)`。段端点须在地图内且相邻。相反对角线的内部交点会阻挡其他 owner；动态侧格本身保留绕行语义，地形、建筑、障碍层和导入边的静态转角约束继续生效。
+
+外部朝向控制器若已选定本轮实际准备的下一步，可调用 `set_prepared_move_steps` 传入 `PreparedMoveStep{owner, next}`，再调用 `prepare(world)`。该 owner 只能提交这一步；`next=std::nullopt` 表示本轮等待，未列出的 actor 保留正常候选。每轮重新提供或清空该快照，所有 setter 和 `prepare` 都须避开工作线程读取。导航查询、worker 规划和稳定提交共享这些约束，提交阶段还会阻止同一轮新接受的对角线相交。上述信息均由接入方从当前运动状态推导，不写入对局存档。新增成员改变 `Navigator` 对象布局，库与调用方须一起完整重编。
+
+`make rts-test` 包含自制的 `mobile_segments_test`，覆盖活动段等待与释放、owner／无效输入、外部已准备步、反向 ID、存读档续跑，以及 1／4／8 线程的逐步完整快照比较。这些用例验证通用单格移动机制；真实载具的插值、朝向和画面表现需由接入方另行验证，任意交通的活性也需单独验证。
+
 ## 视野受限的自适应对手
 
 在自制对局命令中加 `--adaptive-ai`，铜方会依据自己的资源、已探索地形和侦察到的敌情调整生产、扩张、侧翼与集火。加 `--strict-audit` 可在终端查看已观察兵种、效用分值和生产偏好的变化。存档一并保存侦察记忆和当前集火目标。

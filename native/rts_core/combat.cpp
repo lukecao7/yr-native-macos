@@ -87,6 +87,22 @@ struct RouteTargets {
     std::size_t count = 0;
 };
 
+// On a one-cell square grid only opposite diagonals have a strict interior
+// intersection. Cardinal crossings or shared endpoints are already excluded
+// by complete body/source/next cell admission. This keeps mobile side cells
+// traversable and requires neither a guessed vehicle radius nor time history.
+struct DiagonalKey {
+    int cell = -1;
+    unsigned direction = 0;
+};
+
+DiagonalKey diagonal_key(int width, Cell from, Cell to) noexcept {
+    const int dx = to.x - from.x, dy = to.y - from.y;
+    if (std::abs(dx) != 1 || std::abs(dy) != 1) return {};
+    return {std::min(from.y, to.y) * width + std::min(from.x, to.x),
+            dx == dy ? 0U : 1U};
+}
+
 struct MoveChoices {
     std::array<Cell, 8> cells{};
     std::size_t count = 0;
@@ -126,9 +142,9 @@ RouteTargets route_targets(const FlowGrid& grid, Cell from, Cell goal, const Occ
     return targets;
 }
 
-template<class Occupied, class Sample>
+template<class Occupied, class Sample, class Crossed>
 MoveChoices rank_moves(const FlowGrid& grid, Cell from, const RouteTargets& targets,
-                       const Occupied& occupied, const Sample& sample) {
+                       const Occupied& occupied, const Sample& sample, const Crossed& crossed) {
     MoveChoices choices;
     if (!targets.count) return choices;
 
@@ -142,7 +158,7 @@ MoveChoices rank_moves(const FlowGrid& grid, Cell from, const RouteTargets& targ
     navigation::detail::for_flow_neighbour(grid.width, grid.height, grid.blocked, cells[0],
         [&](int neighbour, std::int32_t edge) {
             if (!grid.map.travel_edges.empty() && !grid.map.can_travel(from,grid.cell(neighbour))) return;
-            if (occupied(grid.cell(neighbour))) return;
+            if (occupied(grid.cell(neighbour)) || crossed(from, grid.cell(neighbour))) return;
             cells[count] = neighbour;
             edge_costs[count] = edge;
             ++count;
@@ -300,6 +316,10 @@ void prepare_routes(navigation::FlowCache& cache, const std::vector<Intent>& int
 
 void commit_intents(World& world, const std::vector<Intent>& intents,
                     SpatialIndex& spatial, StepWork& work, const Navigator& navigator) {
+    // Owner-only scratch for this stable-ID commit. Earlier accepted moves
+    // claim their diagonal, so later intents choose the next noncrossing
+    // ranked alternative or wait. No persistent arbitration state is added.
+    std::vector<std::uint8_t> committed_diagonals(world.map.tiles.size(), 0);
     for (std::size_t i = 0; i < intents.size(); ++i) {
         auto& unit = world.entities[i];
         const auto& intent = intents[i];
@@ -320,8 +340,14 @@ void commit_intents(World& world, const std::vector<Intent>& intents,
         }
         for (std::size_t candidate = 0; candidate < intent.moves.count; ++candidate) {
             const auto step = intent.moves.cells[candidate];
-            if (navigator.transient_occupied(step, unit.id)) continue;
+            if (navigator.transient_occupied(step, unit.id) ||
+                navigator.transient_crossed(unit.position, step, unit.id) ||
+                !navigator.prepared_step_allowed(unit.id, step)) continue;
+            const auto diagonal = diagonal_key(world.map.width, unit.position, step);
+            if (diagonal.cell >= 0 &&
+                (committed_diagonals[diagonal.cell] & (1U << (diagonal.direction ^ 1U)))) continue;
             if (!spatial.claim(step, static_cast<int>(i))) continue;
+            if (diagonal.cell >= 0) committed_diagonals[diagonal.cell] |= 1U << diagonal.direction;
             unit.facing = direction(unit.position, step);
             unit.position = step;
             unit.move_wait = static_cast<std::uint8_t>(spec.move_period - 1);
@@ -348,6 +374,26 @@ void Navigator::set_transient_occupancy(std::span<const MobileOccupant> occupant
     transient_occupants_.assign(occupants.begin(), occupants.end());
 }
 
+void Navigator::set_transient_segments(std::span<const MobileSegment> segments) {
+    transient_segments_.assign(segments.begin(), segments.end());
+}
+
+void Navigator::set_prepared_move_steps(std::span<const PreparedMoveStep> rows) {
+    prepared_move_steps_.assign(rows.begin(), rows.end());
+    std::stable_sort(prepared_move_steps_.begin(), prepared_move_steps_.end(),
+                     [](const auto& a, const auto& b) { return a.owner < b.owner; });
+}
+
+bool Navigator::prepared_step_allowed(EntityId owner, Cell next) const noexcept {
+    auto row = std::lower_bound(prepared_move_steps_.begin(), prepared_move_steps_.end(), owner,
+                               [](const auto& entry, EntityId value) { return entry.owner < value; });
+    // Duplicate constraints remain conservative even if an invalid producer
+    // supplies different steps for one owner. No hidden winner is selected.
+    for (; row != prepared_move_steps_.end() && row->owner == owner; ++row)
+        if (!row->next || *row->next != next) return false;
+    return true;
+}
+
 void Navigator::prepare_transient(const Map& map) {
     if (transient_cells_.size() != map.tiles.size()) {
         transient_cells_.assign(map.tiles.size(), {});
@@ -364,6 +410,38 @@ void Navigator::prepare_transient(const Map& map) {
         else if (cell.owner == no_entity && !cell.blocked_for_all) cell.owner = occupant.owner;
         else if (cell.owner != occupant.owner) cell.blocked_for_all = true;
     }
+    if (transient_segment_cells_.size() != map.tiles.size()) {
+        transient_segment_cells_.assign(map.tiles.size(), {});
+    } else {
+        for (const int index : transient_segment_touched_) transient_segment_cells_[index] = {};
+    }
+    transient_segment_touched_.clear();
+    for (const auto& segment : transient_segments_) {
+        const auto key = diagonal_key(map.width, segment.from, segment.to);
+        if (key.cell < 0) continue;
+        auto& cell = transient_segment_cells_[key.cell];
+        if (cell.owner[0] == no_entity && cell.owner[1] == no_entity &&
+            !cell.blocked_for_all[0] && !cell.blocked_for_all[1])
+            transient_segment_touched_.push_back(key.cell);
+        auto& owner = cell.owner[key.direction];
+        auto& blocked = cell.blocked_for_all[key.direction];
+        if (segment.owner == no_entity) blocked = true;
+        else if (owner == no_entity && !blocked) owner = segment.owner;
+        else if (owner != segment.owner) blocked = true;
+    }
+}
+
+bool Navigator::transient_crossed(Cell from, Cell to, EntityId ignore) const noexcept {
+    const auto contains = [&](Cell cell) {
+        return cell.x >= 0 && cell.y >= 0 && cell.x < width_ && cell.y < height_;
+    };
+    if (!contains(from) || !contains(to) || transient_segment_cells_.empty()) return false;
+    const auto key = diagonal_key(width_, from, to);
+    if (key.cell < 0) return false;
+    const auto& cell = transient_segment_cells_[key.cell];
+    const auto direction = key.direction ^ 1U;
+    return cell.blocked_for_all[direction] ||
+           (cell.owner[direction] != no_entity && cell.owner[direction] != ignore);
 }
 
 bool Navigator::transient_occupied(Cell cell, EntityId ignore) const noexcept {
@@ -395,6 +473,19 @@ void Navigator::prepare(const World& world) {
     if (std::any_of(transient_occupants_.begin(), transient_occupants_.end(),
                     [&](const MobileOccupant& occupant) { return !map.contains(occupant.cell); })) {
         throw std::invalid_argument("A transient navigation occupant lies outside the map.");
+    }
+    if (std::any_of(transient_segments_.begin(), transient_segments_.end(),
+                    [&](const MobileSegment& segment) {
+                        return !map.contains(segment.from) || !map.contains(segment.to) ||
+                               grid_distance(segment.from, segment.to) != 1;
+                    })) {
+        throw std::invalid_argument("A transient navigation segment is not a map-contained one-cell move.");
+    }
+    if (std::any_of(prepared_move_steps_.begin(), prepared_move_steps_.end(),
+                    [&](const PreparedMoveStep& row) {
+                        return row.owner == no_entity || (row.next && !map.contains(*row.next));
+                    })) {
+        throw std::invalid_argument("A prepared navigation step has no owner or lies outside the map.");
     }
 
     // Smaller game maps use a blocked rim so the shared FlowCache can keep its
@@ -458,6 +549,8 @@ std::optional<Cell> Navigator::next(const World& world, Cell from, Cell goal, En
     const auto choices = rank_moves(grid, from, routes, occupied,
         [&](int handle, std::span<const int> cells, auto& values) {
             return sample_route(cache_, handle, cells, values);
+        }, [&](Cell a, Cell b) {
+            return transient_crossed(a, b, owner) || !prepared_step_allowed(owner, b);
         });
     if (!choices.count) return std::nullopt;
     return choices.cells[0];
@@ -475,7 +568,7 @@ std::size_t Navigator::ranked_static_steps(const World& world, Cell from, Cell g
     const auto choices = rank_moves(grid, from, routes, mobile_occupied,
         [&](int handle, std::span<const int> cells, auto& values) {
             return sample_route(cache_, handle, cells, values);
-        });
+        }, [](Cell, Cell) { return false; });
     std::copy_n(choices.cells.begin(), choices.count, out.begin());
     return choices.count;
 }
@@ -559,6 +652,8 @@ void tick_combat(World& world, Navigator& navigator) {
         intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied,
             [&](int handle, std::span<const int> cells, auto& values) {
                 return sample_field(prepared_cache, handle, cells, values);
+            }, [&](Cell a, Cell b) {
+                return navigator.transient_crossed(a, b, unit.id) || !navigator.prepared_step_allowed(unit.id, b);
             });
     };
     {
@@ -607,6 +702,8 @@ void tick_combat(World& world, Navigator& navigator) {
         intent.moves = rank_moves(grid, unit.position, intent.goals, destination_occupied,
             [&](int handle, std::span<const int> cells, auto& values) {
                 return sample_route(navigator.cache_, handle, cells, values);
+            }, [&](Cell a, Cell b) {
+                return navigator.transient_crossed(a, b, unit.id) || !navigator.prepared_step_allowed(unit.id, b);
             });
     }
     profiling::Scope commit(navigator.profile_, Phase::Commit);
