@@ -84,6 +84,13 @@ public:
     // blocked; mobile side cells retain ordinary side-around semantics.
     void set_transient_segments(std::span<const MobileSegment>);
     bool transient_crossed(Cell from, Cell to, EntityId ignore = no_entity) const noexcept;
+    // True only for an explicitly attributed active segment, cardinal or
+    // diagonal. Unknown owners are not attributed to unrelated World actors.
+    bool transient_owner_moving(EntityId owner) const noexcept;
+    // Last prepared World::position owner, distinct from full physical/source
+    // occupancy. Empty, invalid or multiple actual bodies return no_entity.
+    // Cycle queries verify this ID against the immutable World snapshot.
+    EntityId prepared_body_owner(Cell cell) const noexcept;
     // Owner stages the actual next step prepared by an external body-turn
     // controller. Unlisted actors keep all ranked alternatives; listed actors
     // may commit only that next step. Empty next admits none. Re-derived each
@@ -119,15 +126,23 @@ private:
         std::array<EntityId, 2> owner{};
         std::array<bool, 2> blocked_for_all{};
     };
+    struct BodyCell {
+        EntityId owner = no_entity;
+        bool ambiguous = false;
+    };
+    void prepare_bodies(const World& world);
     void prepare_transient(const Map& map);
     navigation::FlowCache cache_;
     std::vector<MobileOccupant> transient_occupants_;
     std::vector<TransientCell> transient_cells_;
     std::vector<int> transient_touched_;
     std::vector<MobileSegment> transient_segments_;
+    std::vector<EntityId> transient_active_owners_;
     std::vector<SegmentCell> transient_segment_cells_;
     std::vector<int> transient_segment_touched_;
     std::vector<PreparedMoveStep> prepared_move_steps_;
+    std::vector<BodyCell> body_cells_;
+    std::vector<int> body_touched_;
     std::vector<unsigned char> blocked_;
     std::vector<unsigned char> edges_;
     std::vector<std::uint8_t> obstacle_mask_;
