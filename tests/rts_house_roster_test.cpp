@@ -45,6 +45,77 @@ World opening(const Rules& rules, std::size_t count) {
     return world;
 }
 
+void check_mobile_owners(const Rules& rules, std::size_t houses) {
+    auto world = opening(rules, houses);
+    Navigator nav;
+    std::vector<MobileOccupant> tails;
+    for (std::size_t i = 0; i < houses; ++i) {
+        const auto side = static_cast<Side>(i);
+        const auto start = world.map.starts[i];
+        const Cell cell{start.x, 9};
+        const auto spot = static_cast<std::uint8_t>(i % subcell_offsets.size());
+        const auto tail_spot = static_cast<std::uint8_t>((spot + 1) % subcell_offsets.size());
+        require(world.free_at(cell, whole_cell, side) && world.free_at(cell, spot, side),
+                "An open tile admits every active owner.");
+        const auto stationary = world.spawn(UnitKind::Skirmisher, side, cell, spot);
+        const auto moving = world.spawn(UnitKind::Skirmisher, side, {cell.x + 1, cell.y}, tail_spot);
+        require(stationary && moving, "Every active house places two individually owned bodies.");
+        tails.push_back({cell, *moving, true, tail_spot, side});
+    }
+    nav.set_transient_occupancy(tails);
+    nav.prepare(world);
+    SpatialIndex moves;
+    moves.rebuild(world);
+    for (std::size_t i = 0; i < houses; ++i) {
+        const auto& tail = tails[i];
+        const auto standing = world.cell_occupancy(tail.cell);
+        const auto committed = nav.prepared_slots(tail.cell);
+        require(standing.owners == (1U << i) && std::popcount(standing.slots) == 1 &&
+                committed.owners == (1U << i) && std::popcount(committed.slots) == 2 &&
+                (committed.slots & (1U << tail.subcell)), "The house keeps its own body and trailing foot position.");
+        const auto* mover = world.find(tail.owner);
+        const auto index = static_cast<int>(mover - world.entities.data());
+        require(moves.claim_subcell({tail.cell.x, 10}, index, *mover, {}) == tail.subcell,
+                "Commit a real foot unit's next position for every participating house.");
+        const auto enemy = static_cast<Side>((i + 1) % houses);
+        require(committed.reserve(tail.subcell, tail.side) && !committed.reserve(tail.subcell, enemy) &&
+                !committed.reserve(whole_cell, tail.side), "Two shared places admit a third friendly foot unit.");
+    }
+    auto bad = tails.front();
+    const auto rejected = [&](const MobileOccupant& claimant) {
+        nav.set_transient_occupancy(std::array{claimant});
+        try {
+            nav.prepare(world);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    const Cell empty{0, 0};
+    for (const auto invalid : {static_cast<Side>(houses), static_cast<Side>(255)}) {
+        bad.side = invalid;
+        require(rejected(bad), "Navigation rejects a foot claim from any inactive or invalid house.");
+        auto inactive = *world.find(tails.front().owner);
+        inactive.side = invalid;
+        require(!world.free_at(empty, whole_cell, invalid) && !world.free_at(empty, 0, invalid) &&
+                !world.spawn(UnitKind::Pioneer, invalid, empty) && !moves.claim_subcell(empty, 0, inactive, {}),
+                "Closed houses cannot reserve, spawn, or commit moves on open tiles.");
+    }
+    bad = tails.front();
+    bad.subcell = static_cast<std::uint8_t>(subcell_offsets.size());
+    auto invalid_foot = *world.find(tails.front().owner);
+    invalid_foot.subcell = bad.subcell;
+    require(rejected(bad) && !SubcellOccupancy{}.reserve(bad.subcell, bad.side) &&
+            !moves.claim_subcell(empty, 0, invalid_foot, {}),
+            "A valid house cannot reserve or commit an out-of-range foot position.");
+    require(std::popcount(nav.prepared_slots(tails.front().cell).slots) == 2,
+            "Rejected rows preserve the last successfully published body and tail.");
+    nav.set_transient_occupancy({});
+    nav.prepare(world);
+    for (const auto& tail : tails)
+        require(std::popcount(nav.prepared_slots(tail.cell).slots) == 1, "Clearing a moving tail releases its place.");
+}
+
 void check_open_match(const std::filesystem::path& directory) {
     std::string error;
     auto world = open_match(directory, "EightHarbors.map", error);
@@ -150,6 +221,8 @@ int main(int argc, char** argv) {
         check_open_match(rules_path.parent_path());
         const auto rules = load_rules(rules_path, error);
         if (!rules) throw std::runtime_error(error);
+        for (auto count : {2U, 3U, 8U}) check_mobile_owners(*rules, count);
+        std::cout << "2/3/8 houses: every active foot/body/tail owner, closed houses and invalid spots checked\n";
         for (auto count : {3U, 8U}) {
             const auto reference = play(*rules, count, 1);
             require(reference == play(*rules, count, 4) && reference == play(*rules, count, 8),

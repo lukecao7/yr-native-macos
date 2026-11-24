@@ -20,6 +20,7 @@ private:
     int width_ = 0;
     int height_ = 0;
     int bucket_width_ = 0;
+    std::size_t house_count_ = 0;
     std::vector<int> occupants_;
     std::vector<int> occupied_cells_;
     std::vector<SubcellOccupancy> new_claims_;

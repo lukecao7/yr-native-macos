@@ -7,6 +7,7 @@
 namespace coastal::rts {
 
 void SpatialIndex::rebuild(const World& world) {
+    house_count_ = world.house_count();
     const bool valid = world.map.width > 0 && world.map.width <= Map::max_dimension &&
                        world.map.height > 0 && world.map.height <= Map::max_dimension;
     const int width = valid ? world.map.width : 0;
@@ -60,6 +61,7 @@ bool SpatialIndex::claim(Cell cell, int entity_index) {
 
 std::optional<std::uint8_t> SpatialIndex::claim_subcell(Cell cell, int entity_index, const Entity& unit,
                                                          SubcellOccupancy prepared) {
+    if (side_index(unit.side) >= house_count_ || unit.subcell >= subcell_offsets.size()) return std::nullopt;
     if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) return std::nullopt;
     const auto index = cell.y * width_ + cell.x;
     prepared.merge(new_claims_[index]);

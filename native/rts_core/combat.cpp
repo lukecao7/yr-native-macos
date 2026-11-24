@@ -575,9 +575,13 @@ void Navigator::prepare(const World& world) {
         (!obstacle_mask_.empty() && obstacle_mask_.size()!=map.tiles.size())) {
         throw std::invalid_argument("The navigation map does not match its dimensions.");
     }
+    const auto houses = map.house_count();
     if (std::any_of(transient_occupants_.begin(), transient_occupants_.end(),
-                    [&](const MobileOccupant& occupant) { return !map.contains(occupant.cell); })) {
-        throw std::invalid_argument("A transient navigation occupant lies outside the map.");
+                    [&](const MobileOccupant& occupant) {
+                        return !map.contains(occupant.cell) || side_index(occupant.side) >= houses ||
+                               (occupant.subcell != whole_cell && occupant.subcell >= subcell_offsets.size());
+                    })) {
+        throw std::invalid_argument("A transient navigation occupant has an invalid cell, house or foot position.");
     }
     if (std::any_of(transient_segments_.begin(), transient_segments_.end(),
                     [&](const MobileSegment& segment) {

@@ -78,7 +78,8 @@ public:
     // Transient cells only filter move destinations, never FlowCache topology
     // or diagonal side cells. Distinct owners sharing a cell block all movers;
     // a unique known owner can ignore its own entry. Owner-thread staging and
-    // prepare must not overlap worker reads. Entries must be inside the map.
+    // prepare must not overlap worker reads. Entries need a valid cell, active
+    // house, and a foot position or whole_cell.
     void set_transient_occupancy(std::span<const MobileOccupant>);
     bool transient_occupied(Cell cell, EntityId ignore = no_entity) const noexcept;
     // Replaces derived active segments. prepare() validates one-cell adjacent

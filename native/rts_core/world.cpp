@@ -82,7 +82,7 @@ SubcellOccupancy World::cell_occupancy(Cell cell, EntityId ignore) const noexcep
 }
 
 bool World::free_at(Cell cell, std::uint8_t preferred, Side team) const noexcept {
-    if (!map.walkable(cell)) return false;
+    if (!map.walkable(cell) || side_index(team) >= house_count()) return false;
     if (preferred == whole_cell) return std::none_of(entities.begin(), entities.end(), [cell](const Entity& body) {
         return body.hp && body.position == cell;
     });

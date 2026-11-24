@@ -93,7 +93,8 @@ struct SubcellOccupancy {
     }
     void merge(SubcellOccupancy other) noexcept { slots |= other.slots; owners |= other.owners; }
     std::optional<std::uint8_t> reserve(std::uint8_t preferred, Side side) const noexcept {
-        if (side_index(side) >= max_houses) return std::nullopt;
+        if (side_index(side) >= max_houses ||
+            (preferred != whole_cell && preferred >= subcell_offsets.size())) return std::nullopt;
         if (!slots) return preferred;
         if (preferred >= subcell_offsets.size() || owners != (1U << side_index(side)) ||
             std::popcount(slots) >= 3) return std::nullopt;
