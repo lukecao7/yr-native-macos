@@ -108,7 +108,6 @@ std::optional<std::filesystem::path> resolve_data_directory(
         NSApplication* application = NSApplication.sharedApplication;
         [application setActivationPolicy:NSApplicationActivationPolicyRegular];
         [application finishLaunching];
-        [application activateIgnoringOtherApps:YES];
     }
     return choose_data_directory(error);
 }

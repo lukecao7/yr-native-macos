@@ -165,6 +165,9 @@ void restore_on_relaunch(const fs::path& expected) {
     expect(host::resolve_data_directory(override_directory, error, selector) ==
                override_directory && error.empty() && selections == 0,
            "A one-run override takes priority over the preference");
+    expect(!host::resolve_data_directory(expected / "missing", error, selector) &&
+               !error.empty() && selections == 0,
+           "An invalid explicit directory is rejected without a picker fallback");
     expect(host::load_saved_data_directory() == fs::canonical(expected),
            "An override leaves the picker preference intact");
 }

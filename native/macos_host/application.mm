@@ -6,6 +6,7 @@
 #include <mach/mach_time.h>
 
 #include "frame_image.h"
+#include "initial_window.h"
 #include "input_view.h"
 #include "metal_presenter.h"
 
@@ -200,6 +201,7 @@ void install_quit_menu(NSApplication* application) {
                       launchedAt:(host::FrameClock::time_point)launchedAt
                     stressWindow:(BOOL)stressWindow;
 - (void)start;
+- (void)makeInitialWindowKeyIfActive;
 - (void)detach;
 - (BOOL)startDisplayLink;
 - (void)stopDisplayLink;
@@ -268,6 +270,7 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
     BOOL _usesReadyNotifications;
     BOOL _usedDisplayLink, _timerFallback;
     BOOL _stopped;
+    BOOL _initialWindowNeedsKey;
     int _status;
 }
 
@@ -310,12 +313,35 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
 }
 
 - (void)start {
+    _initialWindowNeedsKey = YES;
+    [self makeInitialWindowKeyIfActive];
+}
+
+- (void)makeInitialWindowKeyIfActive {
+    const bool waiting = _initialWindowNeedsKey && !_stopped;
+    const bool active = waiting && NSApp.isActive;
+    const bool frontmost = active &&
+        NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == NSProcessInfo.processInfo.processIdentifier;
+    const auto action = host::initial_window_action(waiting, active, frontmost);
+    if (action == host::InitialWindowAction::Wait) return;
+
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:_cmd object:nil];
+    if (action == host::InitialWindowAction::Retry) {
+        // AppKit can notify us before the workspace changes its frontmost app.
+        [self performSelector:_cmd withObject:nil afterDelay:0.05];
+        return;
+    }
+    _initialWindowNeedsKey = NO;
     [_window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
     if (![self startDisplayLink]) {
         _timerFallback = YES;
         [self scheduleFrame];
     }
+}
+
+- (void)applicationDidBecomeActive:(NSNotification*)notification {
+    (void)notification;
+    [self makeInitialWindowKeyIfActive];
 }
 
 - (BOOL)startDisplayLink {
@@ -475,6 +501,7 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
     if (_stopped) return;
     _stopped = YES;
     _status = status;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(makeInitialWindowKeyIfActive) object:nil];
     [_timer invalidate];
     _timer = nil;
     [self stopDisplayLink];
@@ -536,6 +563,7 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
 
 - (void)detach {
     _stopped = YES;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(makeInitialWindowKeyIfActive) object:nil];
     [_timer invalidate];
     _timer = nil;
     [self stopDisplayLink];
