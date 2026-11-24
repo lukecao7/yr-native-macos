@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#include "macos_host/launch_options.h"
+#include "macos_host/data_directory.h"
+#include "macos_host/initial_window.h"
 
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
@@ -93,9 +94,11 @@ void test_saved_directory(NSUserDefaults* defaults) {
     expect(host::load_saved_data_directory() == canonical, "A stored symlink resolves to its directory");
 
     std::string error;
-    expect(!host::choose_data_directory(error) && !error.empty() &&
+    expect(!host::choose_data_directory(false, error) && !error.empty() && !NSApp &&
                host::load_saved_data_directory() == canonical,
-           "A picker failure leaves the saved directory available");
+           "An uninitialized picker leaves the saved directory untouched");
+    expect(host::interactive_ui_action(true) == host::InitialWindowAction::Wait && !NSApp,
+           "A background UI check does not initialize AppKit");
 }
 
 void launch_fixture(NSString* mode, const fs::path& data) {
@@ -111,38 +114,68 @@ void launch_fixture(NSString* mode, const fs::path& data) {
            std::string("The separate directory test process failed: ") + mode.UTF8String);
 }
 
+bool open_fixture_data(const fs::path& path, std::string& error) {
+    std::ifstream rules(path / "fixture.rules");
+    std::string header;
+    if (std::getline(rules, header) && header == "CoastalHost directory fixture") return true;
+    error = "The directory fixture rules could not be opened.";
+    return false;
+}
+
 void test_picker_round_trip() {
     const TemporaryDirectory temporary;
     const auto data = temporary.path / "新资料 Workspace";
+    const auto invalid = temporary.path / "Empty media";
     const auto link = temporary.path / "Picked data";
     fs::create_directory(data);
+    fs::create_directory(invalid);
     fs::create_directory_symlink(data, link);
+    std::ofstream(data / "fixture.rules") << "CoastalHost directory fixture\n";
 
     std::string error = "stale error";
-    expect(!host::resolve_data_directory({}, error, [](auto&) { return std::nullopt; }) &&
-               error.empty(),
-           "Canceling the first selection returns no path and no error");
+    bool tried_opening = false;
+    const host::DirectoryValidator track_open = [&](const auto&, auto&) {
+        tried_opening = true;
+        return true;
+    };
+    expect(host::select_data_directory([](auto&) { return std::nullopt; }, track_open, error) ==
+               host::DirectorySelection::Cancelled && error.empty() && !tried_opening,
+           "Canceling the first selection does not open any resources");
 
     const auto missing = temporary.path / "missing";
-    expect(!host::resolve_data_directory({}, error, [&](auto&) { return missing; }) &&
-               !error.empty() && !host::load_saved_data_directory(),
-           "An invalid first selection does not save preferences");
+    expect(host::select_data_directory([&](auto&) { return missing; }, track_open, error) ==
+               host::DirectorySelection::Rejected && !error.empty() && !tried_opening &&
+               !host::load_saved_data_directory(),
+           "A nonexistent first selection is rejected before opening resources");
+    expect(host::select_data_directory([&](auto&) { return invalid; }, open_fixture_data, error) ==
+               host::DirectorySelection::Rejected && !error.empty() && !host::load_saved_data_directory(),
+           "An existing data directory with missing rules is rejected without saving");
+    expect(!host::resolve_data_directory({}, error) && !error.empty() && !NSApp,
+           "Looking up an absent saved choice does not open a picker");
 
     launch_fixture(@"--select", link);
     launch_fixture(@"--relaunch", data);
+    expect(host::select_data_directory([&](auto&) { return invalid; }, open_fixture_data, error) ==
+               host::DirectorySelection::Rejected && host::load_saved_data_directory() == fs::canonical(data),
+           "A rejected replacement preserves the last working directory");
 }
 
 void select_first_directory(const fs::path& link) {
     std::string error;
     int selections = 0;
+    int validations = 0;
     expect(!host::load_saved_data_directory(), "The first launch has no saved preference");
-    const auto directory = host::resolve_data_directory({}, error, [&](auto&) {
+    const auto result = host::select_data_directory([&](auto&) {
         ++selections;
         return link;
-    });
-    expect(directory == fs::canonical(link) && error.empty() && selections == 1,
-           "The first launch invokes the picker once and resolves its path");
-    expect(host::load_saved_data_directory() == directory, "The first selection is saved");
+    }, [&](const auto& path, auto& detail) {
+        ++validations;
+        expect(!host::load_saved_data_directory(), "The directory is uncommitted while opening resources");
+        return path == fs::canonical(link) && open_fixture_data(path, detail);
+    }, error);
+    expect(result == host::DirectorySelection::Accepted && error.empty() && selections == 1 && validations == 1,
+           "The first launch opens resources from the canonical choice once");
+    expect(host::load_saved_data_directory() == fs::canonical(link), "The opened directory is saved");
     // The test binary is a command-line process that exits immediately.
     expect(CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication),
            "The first process could not flush its preferences");
@@ -150,23 +183,18 @@ void select_first_directory(const fs::path& link) {
 
 void restore_on_relaunch(const fs::path& expected) {
     std::string error;
-    int selections = 0;
-    const host::DirectorySelector selector = [&](auto&) {
-        ++selections;
-        return std::nullopt;
-    };
     const auto options = host::parse_launch_options({}, error);
     expect(options.has_value() && options->data_directory.empty(), "No data argument on relaunch");
-    expect(host::resolve_data_directory(options->data_directory, error, selector) ==
-               fs::canonical(expected) && error.empty() && selections == 0,
+    expect(host::resolve_data_directory(options->data_directory, error) ==
+               fs::canonical(expected) && error.empty() && !NSApp,
            "An argument-free relaunch reads the preference and skips the picker");
 
     const auto override_directory = fs::canonical(expected.parent_path());
-    expect(host::resolve_data_directory(override_directory, error, selector) ==
-               override_directory && error.empty() && selections == 0,
+    expect(host::resolve_data_directory(override_directory, error) ==
+               override_directory && error.empty() && !NSApp,
            "A one-run override takes priority over the preference");
-    expect(!host::resolve_data_directory(expected / "missing", error, selector) &&
-               !error.empty() && selections == 0,
+    expect(!host::resolve_data_directory(expected / "missing", error) &&
+               !error.empty() && !NSApp,
            "An invalid explicit directory is rejected without a picker fallback");
     expect(host::load_saved_data_directory() == fs::canonical(expected),
            "An override leaves the picker preference intact");

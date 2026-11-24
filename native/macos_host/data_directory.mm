@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#include "macos_host/launch_options.h"
+#include "macos_host/data_directory.h"
+#include "macos_host/initial_window.h"
 
 #import <AppKit/AppKit.h>
 
@@ -17,18 +18,13 @@ void remember_data_directory(const std::filesystem::path& directory) {
     if (value) [NSUserDefaults.standardUserDefaults setObject:value forKey:data_directory_key];
 }
 
-std::optional<std::filesystem::path> save_selection(
-    const std::optional<std::filesystem::path>& selected, std::string& error) {
-    if (!selected) return std::nullopt;
-    const auto directory = validate_data_directory(*selected, error);
-    if (directory) remember_data_directory(*directory);
-    return directory;
-}
+}  // namespace
 
-std::optional<std::filesystem::path> select_directory_from_panel(std::string& error) {
+std::optional<std::filesystem::path> choose_data_directory(bool retry, std::string& error) {
     @autoreleasepool {
-        if (![NSThread isMainThread] || !NSApp) {
-            error = "The data directory picker requires an AppKit application on its main thread.";
+        error.clear();
+        if (![NSThread isMainThread] || interactive_ui_action(true) != InitialWindowAction::Show) {
+            error = "The data directory picker requires the active app on its main thread.";
             return std::nullopt;
         }
 
@@ -45,9 +41,11 @@ std::optional<std::filesystem::path> select_directory_from_panel(std::string& er
             panel.canCreateDirectories = NO;
             panel.title = @"Choose Data Directory";
             panel.prompt = @"Choose";
+            panel.message = retry ? @"CoastalHost could not open that data. Choose another directory."
+                                  : @"Choose the directory that contains the game data.";
 
             const NSModalResponse response = [panel runModal];
-            if (response == NSModalResponseCancel) {
+            if (response == NSModalResponseCancel || response == NSModalResponseAbort) {
                 return std::nullopt;
             }
             if (response != NSModalResponseOK) {
@@ -70,8 +68,6 @@ std::optional<std::filesystem::path> select_directory_from_panel(std::string& er
     }
 }
 
-}  // namespace
-
 std::optional<std::filesystem::path> load_saved_data_directory() {
     @autoreleasepool {
         NSString* bundle_id = NSBundle.mainBundle.bundleIdentifier;
@@ -91,25 +87,24 @@ std::optional<std::filesystem::path> load_saved_data_directory() {
     }
 }
 
-std::optional<std::filesystem::path> choose_data_directory(std::string& error) {
-    error.clear();
-    return save_selection(select_directory_from_panel(error), error);
-}
-
 std::optional<std::filesystem::path> resolve_data_directory(
-    const std::filesystem::path& requested, std::string& error,
-    const DirectorySelector& selector) {
+    const std::filesystem::path& requested, std::string& error) {
     error.clear();
     if (!requested.empty()) return validate_data_directory(requested, error);
     if (auto saved = load_saved_data_directory()) return saved;
-    if (selector) return save_selection(selector(error), error);
+    error = "No usable saved game data directory. Choose it in an interactive launch or pass --data-dir.";
+    return std::nullopt;
+}
 
-    if ([NSThread isMainThread] && !NSApp) {
-        NSApplication* application = NSApplication.sharedApplication;
-        [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-        [application finishLaunching];
-    }
-    return choose_data_directory(error);
+DirectorySelection select_data_directory(
+    const DirectorySelector& select, const DirectoryValidator& open, std::string& error) {
+    error.clear();
+    const auto selected = select(error);
+    if (!selected) return error.empty() ? DirectorySelection::Cancelled : DirectorySelection::Unavailable;
+    const auto directory = validate_data_directory(*selected, error);
+    if (!directory || !open(*directory, error)) return DirectorySelection::Rejected;
+    remember_data_directory(*directory);
+    return DirectorySelection::Accepted;
 }
 
 }  // namespace coastal::macos_host
