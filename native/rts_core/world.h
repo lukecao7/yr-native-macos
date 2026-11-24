@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace coastal::rts {
@@ -23,12 +24,20 @@ struct Tile {
     std::uint16_t resource = 0;
 };
 
+inline constexpr std::size_t max_houses = 8;
+
 struct Map {
     static constexpr int max_dimension = 512;
     int width = 0;
     int height = 0;
     std::vector<Tile> tiles;
-    std::array<Cell, 2> starts;
+    // Participating houses occupy consecutive slots. Cell{} marks an unused waypoint.
+    std::array<Cell, max_houses> starts{};
+    std::size_t house_count() const noexcept {
+        std::size_t count = 2;
+        while (count < starts.size() && starts[count] != Cell{}) ++count;
+        return count;
+    }
     // Optional imported adjacency: NW,N,NE,W,E,SW,S,SE. Empty permits
     // ordinary ground adjacency; both endpoint bits must admit an edge.
     std::vector<std::uint8_t> travel_edges;
@@ -64,7 +73,7 @@ struct Map {
     }
 };
 
-enum class Side : std::uint8_t { Blue, Copper };
+enum class Side : std::uint8_t { Blue, Copper, House3, House4, House5, House6, House7, House8 };
 constexpr std::size_t side_index(Side side) noexcept { return static_cast<std::size_t>(side); }
 // A body reserves its whole tile unless the owning rules give it a foot slot.
 // A cell has five possible foot positions but only three simultaneous occupants.
@@ -78,11 +87,14 @@ struct SubcellOccupancy {
     std::uint8_t slots = 0;
     std::uint8_t owners = 0;
     void add(std::uint8_t slot, Side side) noexcept {
+        if (side_index(side) >= max_houses) return;
         slots |= slot < subcell_offsets.size() ? static_cast<std::uint8_t>(1U << slot) : 31U;
         owners |= static_cast<std::uint8_t>(1U << side_index(side));
     }
     void merge(SubcellOccupancy other) noexcept { slots |= other.slots; owners |= other.owners; }
     std::optional<std::uint8_t> reserve(std::uint8_t preferred, Side side) const noexcept {
+        if (side_index(side) >= max_houses ||
+            (preferred != whole_cell && preferred >= subcell_offsets.size())) return std::nullopt;
         if (!slots) return preferred;
         if (preferred >= subcell_offsets.size() || owners != (1U << side_index(side)) ||
             std::popcount(slots) >= 3) return std::nullopt;
@@ -208,7 +220,24 @@ struct SideState {
     std::optional<AiMemory> ai;
 };
 
-enum class MatchResult : std::uint8_t { Running, BlueWon, CopperWon, Draw };
+// The first four values are on disk in legacy two-house saves.
+enum class MatchResult : std::uint8_t {
+    Running, BlueWon, CopperWon, Draw, House3Won, House4Won, House5Won, House6Won, House7Won, House8Won
+};
+constexpr MatchResult victory_for(Side house) noexcept {
+    return static_cast<MatchResult>(side_index(house) + (side_index(house) < 2 ? 1 : 2));
+}
+constexpr std::optional<Side> winning_house(MatchResult result) noexcept {
+    if (result == MatchResult::Running || result == MatchResult::Draw || result > MatchResult::House8Won)
+        return std::nullopt;
+    const auto value = static_cast<unsigned>(result);
+    return static_cast<Side>(value - (result < MatchResult::Draw ? 1 : 2));
+}
+constexpr bool valid_match_result(MatchResult result, std::size_t houses) noexcept {
+    if (result == MatchResult::Running || result == MatchResult::Draw) return true;
+    const auto winner = winning_house(result);
+    return winner && side_index(*winner) < houses;
+}
 enum class CommandKind : std::uint8_t {
     Select, AssignGroup, RecallGroup, Move, AttackMove, Hold,
     Deploy, Build, Queue, TogglePause, Cancel, Rally
@@ -232,7 +261,7 @@ struct World {
     static constexpr std::size_t projectile_limit = 262'144;
     Map map;
     Rules rules;
-    std::array<SideState, 2> sides;
+    std::array<SideState, max_houses> sides;
     std::vector<Entity> entities; // Stable increasing IDs.
     std::vector<Projectile> projectiles;
     std::uint64_t step = 0;
@@ -240,6 +269,19 @@ struct World {
     EntityId next_id = 1;
     MatchResult result = MatchResult::Running;
 
+    std::uint8_t defeated_houses = 0; // mid-match eliminations in a game with three or more houses
+    std::size_t house_count() const noexcept { return map.house_count(); }
+    std::span<SideState> active_sides() noexcept { return std::span{sides}.first(house_count()); }
+    std::span<const SideState> active_sides() const noexcept { return std::span{sides}.first(house_count()); }
+    bool house_defeated(Side value) const noexcept {
+        if (side_index(value) >= house_count()) return true;
+        if (result != MatchResult::Running) return winning_house(result) != value;
+        return (defeated_houses & (1U << side_index(value))) != 0;
+    }
+    void mark_house_defeated(Side value) noexcept {
+        if (house_count() > 2 && side_index(value) < house_count())
+            defeated_houses |= static_cast<std::uint8_t>(1U << side_index(value));
+    }
     SideState& side(Side value) noexcept { return sides[side_index(value)]; }
     const SideState& side(Side value) const noexcept { return sides[side_index(value)]; }
     Entity* find(EntityId id) noexcept;

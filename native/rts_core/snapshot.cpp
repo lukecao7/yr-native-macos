@@ -26,6 +26,7 @@ constexpr std::uint16_t legacy_version = 1;
 constexpr std::uint16_t ai_version = 2;
 constexpr std::uint16_t topology_version = 3;
 constexpr std::uint16_t subcell_version = 4;
+constexpr std::uint16_t roster_version = 5;
 constexpr std::size_t snapshot_limit = 16 * 1024 * 1024;
 constexpr std::size_t tile_bytes = 4;
 constexpr std::size_t production_bytes = 7;
@@ -188,12 +189,16 @@ void contact_fields(Archive& archive, auto& contact) {
     archive(contact.hp, contact.seen_at);
 }
 
+bool has_ai_memory(const World& world) {
+    return std::ranges::any_of(world.active_sides(), [](const SideState& side) { return side.ai.has_value(); });
+}
+
 void write_extensions(Writer& writer, const World& world, std::uint32_t focus_count) {
     writer(focus_count);
     for (const auto& entity : world.entities) {
         if (entity.focus != no_entity) writer(entity.id, entity.focus);
     }
-    for (const auto& side : world.sides) {
+    for (const auto& side : world.active_sides()) {
         writer(side.ai.has_value());
         if (!side.ai) continue;
         const auto& memory = *side.ai;
@@ -220,7 +225,7 @@ void read_extensions(Reader& reader, World& world, bool allow_empty = false) {
         ++actor;
     }
 
-    for (auto& side : world.sides) {
+    for (auto& side : world.active_sides()) {
         bool present;
         reader(present);
         if (!present) continue;
@@ -235,7 +240,7 @@ void read_extensions(Reader& reader, World& world, bool allow_empty = false) {
         memory.enemies.resize(reader.count(World::entity_limit, contact_bytes));
         for (auto& contact : memory.enemies) contact_fields(reader, contact);
     }
-    if (!allow_empty && focus_count == 0 && !world.sides[0].ai && !world.sides[1].ai) {
+    if (!allow_empty && focus_count == 0 && !has_ai_memory(world)) {
         throw std::invalid_argument("Save has an empty AI extension.");
     }
 }
@@ -314,12 +319,17 @@ void check_world(const World& world) {
             throw std::invalid_argument("Invalid terrain or resource in save.");
         }
     }
-    if (!map.walkable(map.starts[0]) || !map.walkable(map.starts[1]) ||
-        map.starts[0] == map.starts[1]) {
-        throw std::invalid_argument("Invalid start cells in save.");
+    const auto count = world.house_count();
+    const std::span starts{map.starts};
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!map.walkable(starts[i]) || std::ranges::find(starts.first(i), starts[i]) != starts.first(i).end())
+            throw std::invalid_argument("Invalid or duplicate start cell in save.");
     }
+    if (!std::ranges::all_of(starts.subspan(count), [](Cell start) { return start == Cell{}; }) ||
+        (world.defeated_houses & ~((1U << count) - 1U)) || (count == 2 && world.defeated_houses))
+        throw std::invalid_argument("Invalid house roster in save.");
     if (!valid_rules(world.rules) || world.rng_state == 0 || world.next_id == no_entity ||
-        world.result > MatchResult::Draw) {
+        !valid_match_result(world.result, count)) {
         throw std::invalid_argument("Invalid rules or simulation state in save.");
     }
     if (world.entities.size() > World::entity_limit ||
@@ -330,7 +340,7 @@ void check_world(const World& world) {
     EntityId previous = no_entity;
     for (const Entity& entity : world.entities) {
         if (entity.id <= previous || entity.id >= world.next_id ||
-            entity.side > Side::Copper || entity.kind >= UnitKind::Count ||
+            side_index(entity.side) >= count || entity.kind >= UnitKind::Count ||
             entity.hp == 0 || entity.hp > world.rules.spec(entity.kind).hp ||
             !map.walkable(entity.position) || !optional_cell(map, entity.destination) ||
             !optional_cell(map, entity.deposit) || entity.order > OrderKind::Gather ||
@@ -363,7 +373,8 @@ void check_world(const World& world) {
         }
     }
 
-    for (const Side value : {Side::Blue, Side::Copper}) {
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto value = static_cast<Side>(i);
         const auto& side = world.side(value);
         if (side.power_percent > 100 || !optional_cell(map, side.rally) ||
             side.queue.size() > SideState::queue_limit ||
@@ -428,16 +439,20 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
     writer.bytes.insert(writer.bytes.end(), signature.begin(), signature.end());
     const auto focus_count = static_cast<std::uint32_t>(std::ranges::count_if(
         world.entities, [](const Entity& entity) { return entity.focus != no_entity; }));
-    const bool has_extension = focus_count != 0 || world.sides[0].ai || world.sides[1].ai;
+    const bool has_extension = focus_count != 0 || has_ai_memory(world);
     const bool has_topology = !world.map.travel_edges.empty();
     const bool has_subcells = std::ranges::any_of(world.entities, [](const Entity& unit) { return unit.subcell != whole_cell; });
-    writer(has_subcells ? subcell_version : has_topology ? topology_version : has_extension ? ai_version : legacy_version);
+    const auto houses = static_cast<std::uint8_t>(world.house_count());
+    const auto version = houses > 2 ? roster_version : has_subcells ? subcell_version :
+                         has_topology ? topology_version : has_extension ? ai_version : legacy_version;
+    writer(version);
     world_fields(writer, world);
     writer(static_cast<std::uint16_t>(world.map.width), static_cast<std::uint16_t>(world.map.height));
-    for (const Cell start : world.map.starts) cell_fields(writer, start);
+    if (version >= roster_version) writer(houses, world.defeated_houses);
+    for (const Cell start : std::span{world.map.starts}.first(houses)) cell_fields(writer, start);
     for (const Tile& tile : world.map.tiles) writer(tile.terrain, tile.height, tile.resource);
     rules_fields(writer, world.rules);
-    for (const SideState& side : world.sides) {
+    for (const SideState& side : world.active_sides()) {
         side_fields(writer, side);
         writer.count(side.queue);
         for (const Production& item : side.queue) writer(item.kind, item.paid, item.remaining_work);
@@ -448,12 +463,12 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
     for (const Entity& entity : world.entities) entity_fields(writer, entity);
     writer.count(world.projectiles);
     for (const Projectile& projectile : world.projectiles) projectile_fields(writer, projectile);
-    if (has_extension || has_topology || has_subcells) write_extensions(writer, world, focus_count);
-    if (has_topology || has_subcells) {
+    if (version >= ai_version) write_extensions(writer, world, focus_count);
+    if (version >= topology_version) {
         writer.count(world.map.travel_edges);
         for (auto edge:world.map.travel_edges) writer(edge);
     }
-    if (has_subcells) for (const auto& unit : world.entities) writer(unit.subcell, unit.previous_subcell);
+    if (version >= subcell_version) for (const auto& unit : world.entities) writer(unit.subcell, unit.previous_subcell);
     writer(checksum(writer.bytes));
     return std::move(writer.bytes);
 }
@@ -478,7 +493,7 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         Reader reader(body.subspan(signature.size()));
         std::uint16_t version;
         reader(version);
-        if (version != legacy_version && version != ai_version && version != topology_version && version != subcell_version) {
+        if (version < legacy_version || version > roster_version) {
             throw std::invalid_argument("Unsupported save version.");
         }
 
@@ -490,14 +505,20 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         if (!dimensions_valid(width, height)) throw std::invalid_argument("Invalid map dimensions in save.");
         world.map.width = width;
         world.map.height = height;
-        for (Cell& start : world.map.starts) cell_fields(reader, start);
+        std::uint8_t houses = 2;
+        if (version >= roster_version) {
+            reader(houses, world.defeated_houses);
+            if (houses < 3 || houses > max_houses) throw std::invalid_argument("Invalid house count in save.");
+        }
+        for (Cell& start : std::span{world.map.starts}.first(houses)) cell_fields(reader, start);
+        if (world.house_count() != houses) throw std::invalid_argument("Missing house start in save.");
         const auto area = static_cast<std::size_t>(width) * height;
         reader.require_entries(area, tile_bytes);
         world.map.tiles.resize(area);
         for (Tile& tile : world.map.tiles) reader(tile.terrain, tile.height, tile.resource);
 
         rules_fields(reader, world.rules);
-        for (SideState& side : world.sides) {
+        for (SideState& side : world.active_sides()) {
             side_fields(reader, side);
             side.queue.resize(reader.count(SideState::queue_limit, production_bytes));
             for (Production& item : side.queue) reader(item.kind, item.paid, item.remaining_work);
@@ -511,11 +532,11 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         if (version >= ai_version) read_extensions(reader, world, version >= topology_version);
         if (version >= topology_version) {
             const auto count=reader.count(area,1);
-            if (count!=area && !(version==subcell_version && !count)) throw std::invalid_argument("Save topology does not match its map.");
+            if (count!=area && !(version>=subcell_version && !count)) throw std::invalid_argument("Save topology does not match its map.");
             world.map.travel_edges.resize(count);
             for (auto& edge:world.map.travel_edges) reader(edge);
         }
-        if (version == subcell_version) for (auto& unit : world.entities) reader(unit.subcell, unit.previous_subcell);
+        if (version >= subcell_version) for (auto& unit : world.entities) reader(unit.subcell, unit.previous_subcell);
         if (!reader.empty()) throw std::invalid_argument("Unexpected bytes at the end of the save.");
         check_world(world);
         world.refresh_entity_index();

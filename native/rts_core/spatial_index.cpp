@@ -7,6 +7,7 @@
 namespace coastal::rts {
 
 void SpatialIndex::rebuild(const World& world) {
+    house_count_ = world.house_count();
     const bool valid = world.map.width > 0 && world.map.width <= Map::max_dimension &&
                        world.map.height > 0 && world.map.height <= Map::max_dimension;
     const int width = valid ? world.map.width : 0;
@@ -60,6 +61,7 @@ bool SpatialIndex::claim(Cell cell, int entity_index) {
 
 std::optional<std::uint8_t> SpatialIndex::claim_subcell(Cell cell, int entity_index, const Entity& unit,
                                                          SubcellOccupancy prepared) {
+    if (side_index(unit.side) >= house_count_ || unit.subcell >= subcell_offsets.size()) return std::nullopt;
     if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) return std::nullopt;
     const auto index = cell.y * width_ + cell.x;
     prepared.merge(new_claims_[index]);
@@ -90,7 +92,7 @@ const Entity* SpatialIndex::nearest_enemy(const World& world, const Entity& from
         for (int bx = left; bx <= right; ++bx) {
             for (int i = heads_[by * bucket_width_ + bx]; i >= 0; i = next_[i]) {
                 const auto& unit = world.entities[i];
-                if (unit.side == from.side) continue;
+                if (unit.side == from.side || (world.defeated_houses && world.house_defeated(unit.side))) continue;
                 const int distance = std::max(std::abs(unit.position.x - x),
                                               std::abs(unit.position.y - y));
                 if (distance < best_distance ||

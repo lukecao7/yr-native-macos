@@ -24,7 +24,8 @@ std::optional<World> open_match(const std::filesystem::path& directory, std::str
     world.map = std::move(*map);
     world.rules = *rules;
     world.rng_state = 0x295F732D18C2CB5DULL;
-    for (const Side team : {Side::Blue, Side::Copper}) {
+    for (std::size_t i = 0; i < world.house_count(); ++i) {
+        const auto team = static_cast<Side>(i);
         world.side(team).funds = rules->initial_funds;
         if (!world.spawn(UnitKind::Pioneer, team, world.map.starts[side_index(team)])) {
             error = "Invalid starting position in selected map.";
@@ -32,7 +33,8 @@ std::optional<World> open_match(const std::filesystem::path& directory, std::str
         }
     }
     constexpr std::array offsets{Cell{1, 0}, Cell{0, 1}, Cell{-1, 0}, Cell{0, -1}};
-    for (const Side team : {Side::Blue, Side::Copper}) {
+    for (std::size_t i = 0; i < world.house_count(); ++i) {
+        const auto team = static_cast<Side>(i);
         const auto origin = world.map.starts[side_index(team)];
         bool spawned = false;
         for (const auto offset : offsets) {

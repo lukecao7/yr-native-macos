@@ -56,7 +56,7 @@ public:
     WorkerPool& workers() noexcept { return workers_; }
     const StepWork& last_work() const noexcept { return work_; }
     std::span<const std::uint8_t> visibility(Side side) const noexcept {
-        return visible_[side_index(side)];
+        return side_index(side) < visible_houses_ ? std::span<const std::uint8_t>{visible_[side_index(side)]} : std::span<const std::uint8_t>{};
     }
     navigation::FlowCache::Stats flow_stats() const noexcept { return cache_.stats(); }
 
@@ -78,7 +78,8 @@ public:
     // Transient cells only filter move destinations, never FlowCache topology
     // or diagonal side cells. Distinct owners sharing a cell block all movers;
     // a unique known owner can ignore its own entry. Owner-thread staging and
-    // prepare must not overlap worker reads. Entries must be inside the map.
+    // prepare must not overlap worker reads. Entries need a valid cell, active
+    // house, and a foot position or whole_cell.
     void set_transient_occupancy(std::span<const MobileOccupant>);
     bool transient_occupied(Cell cell, EntityId ignore = no_entity) const noexcept;
     // Replaces derived active segments. prepare() validates one-cell adjacent
@@ -157,7 +158,8 @@ private:
     WorkerPool workers_;
     SpatialIndex spatial_;
     StepWork work_{};
-    std::array<std::vector<std::uint8_t>, 2> visible_;
+    std::array<std::vector<std::uint8_t>, max_houses> visible_;
+    std::size_t visible_houses_ = 0;
     profiling::Recorder profile_;
 };
 

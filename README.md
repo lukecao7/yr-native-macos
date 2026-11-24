@@ -99,7 +99,7 @@ python3 tests/rts_fixture_data.py "$match_dir"
   --data-dir "$match_dir" --skirmish-map Basin.map --strict-audit
 ```
 
-你操控蓝方，铜方按固定脚本生产并进攻。档案保存在数据目录的 `CoastalHost.snapshot`。右键可退出建造预览，靠近窗口边缘、用方向键或滚轮可移动相机，Ctrl 加滚轮缩放。
+你操控蓝方，地图中的其他各方按固定脚本生产并进攻。档案保存在数据目录的 `CoastalHost.snapshot`。右键可退出建造预览，靠近窗口边缘、用方向键或滚轮可移动相机，Ctrl 加滚轮缩放。
 
 | 操作 | 键鼠 |
 | --- | --- |
@@ -109,7 +109,9 @@ python3 tests/rts_fixture_data.py "$match_dir"
 | 下令 | 右键移动，Shift+右键边走边攻击，H 驻守，空格定位所选单位或基地。 |
 | 存读档 | F5 保存，F9 读取。 |
 
-自制 `COASTAL_MAP` 文本地图使用 `.` 平地、`/` 坡道、`=` 高地、`~` 水面、`#` 障碍、`o` 矿点、`a` 和 `b` 两方出生格。`coastal_rules.tsv` 保存造价、生命、速度、视野、伤害和生产参数。
+自制 `COASTAL_MAP` 文本地图使用 `.` 平地、`/` 坡道、`=` 高地、`~` 水面、`#` 障碍、`o` 矿点、`a` 至 `h` 是按顺序启用的 2 至 8 个出生格。`coastal_rules.tsv` 保存造价、生命、速度、视野、伤害和生产参数。
+
+公开的 `tests/fixtures/EightHarbors.map` 提供八方自制地图。以 `tests/fixtures` 为数据目录，并传入 `--skirmish-map EightHarbors.map` 即可开局。各方独立结算，最后一方存活时获胜。三方以上使用 v5 存档，两方场景按原记录内容继续使用 v1 至 v4。
 
 ### 单格内的步兵站位
 
@@ -171,7 +173,7 @@ setter 先保存数据；下一次 `World::tick` 会更新距离场。手动调�
 
 ## 视野受限的自适应对手
 
-在自制对局命令中加 `--adaptive-ai`，铜方会依据自己的资源、已探索地形和侦察到的敌情调整生产、扩张、侧翼与集火。加 `--strict-audit` 可在终端查看已观察兵种、效用分值和生产偏好的变化。存档一并保存侦察记忆和当前集火目标。
+在自制对局命令中加 `--adaptive-ai`，各电脑方会依据各自的资源、已探索地形和侦察到的敌情调整生产、扩张、侧翼与集火。加 `--strict-audit` 可在终端查看已观察兵种、效用分值和生产偏好的变化。存档一并保存侦察记忆和当前集火目标。
 
 ```sh
 make rts-ai-bench

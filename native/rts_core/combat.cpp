@@ -64,7 +64,7 @@ void advance_projectiles(World& world) {
 
     if (!std::erase_if(world.entities, [](const Entity& unit) { return unit.hp == 0; })) return;
     world.refresh_entity_index();
-    for (SideState& side : world.sides) {
+    for (SideState& side : world.active_sides()) {
         const auto retire = [&](std::vector<EntityId>& group) {
             std::erase_if(group, [&](EntityId id) { return !world.find(id); });
         };
@@ -253,13 +253,15 @@ template<class Occupied>
 Intent plan_unit(const World& world, const FlowGrid& grid, const SpatialIndex& spatial,
                  const Entity& unit, const Occupied& occupied, const Navigator& navigator) {
     Intent intent;
+    if (world.defeated_houses && world.house_defeated(unit.side)) return intent;
     const auto& spec = world.rules.spec(unit.kind);
     Cell goal = unit.destination;
     if (spec.damage && unit.order != OrderKind::Move && unit.order != OrderKind::Gather) {
         const bool pursues = unit.order == OrderKind::AttackMove && spec.move_period;
         const int radius = pursues ? spec.vision : std::min(spec.vision, spec.range);
         const auto* focused = unit.focus ? world.find(unit.focus) : nullptr;
-        if (focused && (focused->side == unit.side || grid_distance(unit.position, focused->position) > radius)) {
+        if (focused && (focused->side == unit.side || grid_distance(unit.position, focused->position) > radius ||
+                        (world.defeated_houses && world.house_defeated(focused->side)))) {
             focused = nullptr;
         }
         const auto* target = focused ? focused : spatial.nearest_enemy(world, unit, radius);
@@ -304,13 +306,14 @@ bool launch(World& world, Entity& unit, const Intent& intent, const UnitSpec& sp
     return true;
 }
 
-void refresh_visible_rows(const World& world, std::array<std::vector<std::uint8_t>, 2>& vision,
+void refresh_visible_rows(const World& world, std::span<std::vector<std::uint8_t>> vision,
                           int first_row, int end_row) {
     const int width = world.map.width;
     for (auto& mask : vision) {
         std::fill(mask.begin() + first_row * width, mask.begin() + end_row * width, 0);
     }
     for (const auto& unit : world.entities) {
+        if (world.defeated_houses && world.house_defeated(unit.side)) continue;
         const int radius = world.rules.spec(unit.kind).vision;
         const int top = std::max(first_row, unit.position.y - radius);
         const int bottom = std::min(end_row, unit.position.y + radius + 1);
@@ -572,9 +575,13 @@ void Navigator::prepare(const World& world) {
         (!obstacle_mask_.empty() && obstacle_mask_.size()!=map.tiles.size())) {
         throw std::invalid_argument("The navigation map does not match its dimensions.");
     }
+    const auto houses = map.house_count();
     if (std::any_of(transient_occupants_.begin(), transient_occupants_.end(),
-                    [&](const MobileOccupant& occupant) { return !map.contains(occupant.cell); })) {
-        throw std::invalid_argument("A transient navigation occupant lies outside the map.");
+                    [&](const MobileOccupant& occupant) {
+                        return !map.contains(occupant.cell) || side_index(occupant.side) >= houses ||
+                               (occupant.subcell != whole_cell && occupant.subcell >= subcell_offsets.size());
+                    })) {
+        throw std::invalid_argument("A transient navigation occupant has an invalid cell, house or foot position.");
     }
     if (std::any_of(transient_segments_.begin(), transient_segments_.end(),
                     [&](const MobileSegment& segment) {
@@ -690,7 +697,7 @@ std::size_t Navigator::ranked_static_steps(const World& world, Cell from, Cell g
 }
 
 bool apply_combat(World& world, const Command& command) {
-    if (side_index(command.side) >= world.sides.size()) return false;
+    if (world.house_defeated(command.side)) return false;
     SideState& side = world.side(command.side);
     switch (command.kind) {
     case CommandKind::Select:
@@ -718,7 +725,7 @@ bool apply_combat(World& world, const Command& command) {
         (command.kind == CommandKind::Move ? OrderKind::Move : OrderKind::AttackMove);
     if (command.focus != no_entity) {
         const auto* target = world.find(command.focus);
-        if (order != OrderKind::AttackMove || !target || target->side == command.side) return false;
+        if (order != OrderKind::AttackMove || !target || target->side == command.side || world.house_defeated(target->side)) return false;
     }
     const auto ids = owned_ids(world, command.side, command.units.empty() ? side.selected : command.units);
     bool changed = false;
@@ -750,10 +757,12 @@ void tick_combat(World& world, Navigator& navigator) {
     const FlowGrid grid{snapshot.map, navigator.blocked_, std::max(minimum_flow_extent, navigator.width_),
                         std::max(minimum_flow_extent, navigator.height_)};
     const auto occupied = [&](Cell cell) { return navigator.spatial_.at(cell) != -1; };
-    for (auto& mask : navigator.visible_) mask.resize(snapshot.map.tiles.size());
+    navigator.visible_houses_ = world.house_count();
+    auto vision = std::span{navigator.visible_}.first(navigator.visible_houses_);
+    for (auto& mask : vision) mask.resize(snapshot.map.tiles.size());
     std::vector<Intent> intents(snapshot.entities.size());
     if (intents.empty()) {
-        refresh_visible_rows(snapshot, navigator.visible_, 0, snapshot.map.height);
+        refresh_visible_rows(snapshot, vision, 0, snapshot.map.height);
         prepare_routes(navigator.cache_, intents, navigator.workers_.count());
         return;
     }
@@ -791,7 +800,7 @@ void tick_combat(World& world, Navigator& navigator) {
                 return vision_rows[0] + (vision_rows[1] - vision_rows[0]) *
                            static_cast<int>(index) / static_cast<int>(lanes);
             };
-            refresh_visible_rows(snapshot, navigator.visible_, lane ? split(lane) : 0,
+            refresh_visible_rows(snapshot, vision, lane ? split(lane) : 0,
                                  lane + 1 == lanes ? snapshot.map.height : split(lane + 1));
         });
     }
