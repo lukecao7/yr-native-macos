@@ -30,6 +30,8 @@ struct MobileOccupant {
     // Move to complete. Producers may clear this only after physical motion
     // and body turning have settled. Unknown producers default to waiting.
     bool blocks_completion = true;
+    std::uint8_t subcell = whole_cell;
+    Side side = Side::Blue;
 };
 
 // Derived active one-cell centre segment. It keeps a moving owner's whole
@@ -103,7 +105,8 @@ public:
     // when every entry there has settled. Own entries count for completion;
     // unknown/multiple owners remain conservative even if their flags clear.
     // This query allocates nothing and never changes the World or FlowCache.
-    bool can_finish_move(Cell from, Cell goal, bool goal_has_body) const noexcept;
+    bool can_finish_move(Cell from, Cell goal, bool goal_has_body, const Entity* mover = nullptr) const noexcept;
+    SubcellOccupancy prepared_slots(Cell cell) const noexcept;
 
     // Owner-thread query over the last prepared static grid. Returns all
     // downhill route steps in next()'s stable cost order, ignoring mobile
@@ -121,6 +124,7 @@ private:
         EntityId owner = no_entity;
         bool blocked_for_all = false;
         bool blocks_completion = false;
+        SubcellOccupancy slots;
     };
     struct SegmentCell {
         std::array<EntityId, 2> owner{};
@@ -129,6 +133,7 @@ private:
     struct BodyCell {
         EntityId owner = no_entity;
         bool ambiguous = false;
+        SubcellOccupancy slots;
     };
     void prepare_bodies(const World& world);
     void prepare_transient(const Map& map);

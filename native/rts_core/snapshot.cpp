@@ -25,6 +25,7 @@ constexpr std::array<std::uint8_t, 4> signature{'C', 'R', 'T', 'S'};
 constexpr std::uint16_t legacy_version = 1;
 constexpr std::uint16_t ai_version = 2;
 constexpr std::uint16_t topology_version = 3;
+constexpr std::uint16_t subcell_version = 4;
 constexpr std::size_t snapshot_limit = 16 * 1024 * 1024;
 constexpr std::size_t tile_bytes = 4;
 constexpr std::size_t production_bytes = 7;
@@ -335,6 +336,8 @@ void check_world(const World& world) {
             !optional_cell(map, entity.deposit) || entity.order > OrderKind::Gather ||
             entity.gather > GatherPhase::Return || entity.depot >= world.next_id ||
             entity.focus >= world.next_id ||
+            (entity.subcell == whole_cell ? entity.previous_subcell != whole_cell :
+                entity.subcell >= subcell_offsets.size() || entity.previous_subcell >= subcell_offsets.size()) ||
             entity.cargo > world.rules.cargo_capacity || entity.work >= world.rules.harvest_ticks ||
             entity.facing.x < -1 || entity.facing.x > 1 ||
             entity.facing.y < -1 || entity.facing.y > 1) {
@@ -427,7 +430,8 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
         world.entities, [](const Entity& entity) { return entity.focus != no_entity; }));
     const bool has_extension = focus_count != 0 || world.sides[0].ai || world.sides[1].ai;
     const bool has_topology = !world.map.travel_edges.empty();
-    writer(has_topology ? topology_version : has_extension ? ai_version : legacy_version);
+    const bool has_subcells = std::ranges::any_of(world.entities, [](const Entity& unit) { return unit.subcell != whole_cell; });
+    writer(has_subcells ? subcell_version : has_topology ? topology_version : has_extension ? ai_version : legacy_version);
     world_fields(writer, world);
     writer(static_cast<std::uint16_t>(world.map.width), static_cast<std::uint16_t>(world.map.height));
     for (const Cell start : world.map.starts) cell_fields(writer, start);
@@ -444,11 +448,12 @@ std::vector<std::uint8_t> encode_snapshot(const World& world) {
     for (const Entity& entity : world.entities) entity_fields(writer, entity);
     writer.count(world.projectiles);
     for (const Projectile& projectile : world.projectiles) projectile_fields(writer, projectile);
-    if (has_extension || has_topology) write_extensions(writer, world, focus_count);
-    if (has_topology) {
+    if (has_extension || has_topology || has_subcells) write_extensions(writer, world, focus_count);
+    if (has_topology || has_subcells) {
         writer.count(world.map.travel_edges);
         for (auto edge:world.map.travel_edges) writer(edge);
     }
+    if (has_subcells) for (const auto& unit : world.entities) writer(unit.subcell, unit.previous_subcell);
     writer(checksum(writer.bytes));
     return std::move(writer.bytes);
 }
@@ -473,7 +478,7 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         Reader reader(body.subspan(signature.size()));
         std::uint16_t version;
         reader(version);
-        if (version != legacy_version && version != ai_version && version != topology_version) {
+        if (version != legacy_version && version != ai_version && version != topology_version && version != subcell_version) {
             throw std::invalid_argument("Unsupported save version.");
         }
 
@@ -503,13 +508,14 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         for (Entity& entity : world.entities) entity_fields(reader, entity);
         world.projectiles.resize(reader.count(World::projectile_limit, projectile_bytes));
         for (Projectile& projectile : world.projectiles) projectile_fields(reader, projectile);
-        if (version >= ai_version) read_extensions(reader, world, version == topology_version);
-        if (version == topology_version) {
+        if (version >= ai_version) read_extensions(reader, world, version >= topology_version);
+        if (version >= topology_version) {
             const auto count=reader.count(area,1);
-            if (count!=area) throw std::invalid_argument("Save topology does not match its map.");
+            if (count!=area && !(version==subcell_version && !count)) throw std::invalid_argument("Save topology does not match its map.");
             world.map.travel_edges.resize(count);
             for (auto& edge:world.map.travel_edges) reader(edge);
         }
+        if (version == subcell_version) for (auto& unit : world.entities) reader(unit.subcell, unit.previous_subcell);
         if (!reader.empty()) throw std::invalid_argument("Unexpected bytes at the end of the save.");
         check_world(world);
         world.refresh_entity_index();
