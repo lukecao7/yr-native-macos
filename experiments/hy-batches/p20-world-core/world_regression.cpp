@@ -15,6 +15,11 @@ int main() {
   assert(yr_world_create(&w, path, 5, 7) == -4 && !w);
   assert(yr_world_create(&w, path, 4, 7) == 0);
   assert(yr_world_snapshot_json(w, nullptr, 10) == -2);
+  assert(yr_world_select_at(w, 0, 0, 0) == 1 && yr_world_selected_count(w) == 1);
+  assert(yr_world_select_at(w, 1, 1, 1) == 1 && yr_world_selected_count(w) == 2);
+  assert(yr_world_select_at(w, 1, 1, 1) == 1 && yr_world_selected_count(w) == 1);
+  assert(yr_world_select_at(w, 2, 2, 0) == 0 && yr_world_selected_count(w) == 1);
+  assert(yr_world_clear_selection(w) == 0 && yr_world_selected_count(w) == 0);
   std::vector<char> buf(10000);
   for (int threads : {1, 4}) {
     for (int tick = 0; tick < 30; ++tick) {

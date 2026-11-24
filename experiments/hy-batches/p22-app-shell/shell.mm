@@ -204,6 +204,7 @@ yr_event YrEventFromNSEvent(NSEvent *e, int cell_px, int view_h_px) {
         case NSEventTypeLeftMouseUp:      ev.type = YR_EVT_LEFT_UP;    break;
         case NSEventTypeLeftMouseDragged: ev.type = YR_EVT_LEFT_DRAG;  break;
         case NSEventTypeRightMouseDown:   ev.type = YR_EVT_RIGHT_DOWN; break;
+        case NSEventTypeRightMouseDragged: ev.type = YR_EVT_RIGHT_DRAG; break;
         case NSEventTypeRightMouseUp:     ev.type = YR_EVT_RIGHT_UP;   break;
         case NSEventTypeKeyDown:          ev.type = YR_EVT_KEY_DOWN;   break;
         case NSEventTypeKeyUp:            ev.type = YR_EVT_KEY_UP;     break;
@@ -222,7 +223,7 @@ yr_event YrEventFromNSEvent(NSEvent *e, int cell_px, int view_h_px) {
     if (ev.x < 0) ev.x = 0;
     if (ev.y < 0) ev.y = 0;
 
-    bool is_mouse = (ev.type >= YR_EVT_LEFT_DOWN && ev.type <= YR_EVT_RIGHT_UP);
+    bool is_mouse = (ev.type >= YR_EVT_LEFT_DOWN && ev.type <= YR_EVT_RIGHT_UP) || ev.type == YR_EVT_RIGHT_DRAG;
     bool is_key   = (ev.type == YR_EVT_KEY_DOWN || ev.type == YR_EVT_KEY_UP);
     ev.click_count = is_mouse ? (int)[e clickCount] : 0;
     ev.key_code    = is_key ? (int)[e keyCode] : -1;

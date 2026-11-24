@@ -1,6 +1,6 @@
 /* SELF_AUTHORED_MOCK —— P21 自检专用最小世界核心桩，不属于 shared/yr_slice.h 的共享 ABI。
  *
- * 职责：只记录 yr_input_dispatch 对 yr_world_* 的调用（函数名 + 参数），不做任何游戏逻辑。
+ * 职责：记录输入桥的世界调用，提供三个位于已知位置的测试目标与选择标记。
  * 边界：本桩「未与真实世界核心（p20-world-core 的 libyrworld.a）链接，将在第六批集成」时被替换。
  *       它是重建 + 独立模拟，不是《尤里的复仇》原版 exe 的导出接口。
  */

@@ -103,6 +103,8 @@ int main(void) {
             {8, "LeftMouseDown", NSEventTypeLeftMouseDown, 24, 24, F_SHIFT | F_CTRL | F_ALT,
                 "[\"shift\",\"control\",\"alt\"]", 3, 0, false,
                 {YR_EVT_LEFT_DOWN, 1, 29, YR_MOD_SHIFT | YR_MOD_CONTROL | YR_MOD_ALT, 3, -1}},
+            {9, "RightMouseDragged", NSEventTypeRightMouseDragged, 48, 672, F_ALT, "[\"alt\"]", 1, 0, false,
+                {YR_EVT_RIGHT_DRAG, 2, 2, YR_MOD_ALT, 1, -1}},
         };
         const int N = (int)(sizeof(cases) / sizeof(cases[0]));
 

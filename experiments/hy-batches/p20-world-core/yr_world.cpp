@@ -262,6 +262,21 @@ int yr_world_select_box(yr_world* w, int x0, int y0, int x1, int y1, int additiv
   return n;  // 返回操作后的选中总数
 }
 
+int yr_world_select_at(yr_world* w, int x, int y, int toggle) {
+  if (!w) return -1;
+  const auto hit = std::find_if(w->units.begin(), w->units.end(), [x, y](const auto& unit) {
+    return unit.x == x && unit.y == y;
+  });
+  if (hit == w->units.end()) return 0;
+  if (toggle) {
+    hit->selected = !hit->selected;
+  } else {
+    yr_world_clear_selection(w);
+    hit->selected = true;
+  }
+  return 1;
+}
+
 int yr_world_selected_count(const yr_world* w) {
   if (!w) return 0;
   int n = 0;

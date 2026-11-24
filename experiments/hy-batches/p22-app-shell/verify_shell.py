@@ -50,7 +50,7 @@ SHARED_HDR = os.path.normpath(os.path.join(HERE, "..", "shared", "yr_slice.h"))
 
 NS_TYPE_TO_YR = {
     "LeftMouseDown": 1, "LeftMouseUp": 2, "LeftMouseDragged": 3,
-    "RightMouseDown": 4, "RightMouseUp": 5, "KeyDown": 6, "KeyUp": 7,
+    "RightMouseDown": 4, "RightMouseUp": 5, "KeyDown": 6, "KeyUp": 7, "RightMouseDragged": 8,
 }
 MOD_BITS = {"shift": 1, "control": 2, "alt": 4}
 

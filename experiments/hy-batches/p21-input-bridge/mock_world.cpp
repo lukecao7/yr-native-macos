@@ -1,29 +1,54 @@
-/* SELF_AUTHORED_MOCK —— 只记录 yr_world_* 调用名与参数、不做任何游戏逻辑的最小桩。
- * 未与真实世界核心（p20-world-core / libyrworld.a）链接，将在第六批集成时替换。
- *
- * 说明：三个 yr_world_* 函数均返回确定性常量 3，仅用于让桥接层状态机可重放
- *       （让 RIGHT_DOWN 的「已有选中」查询分支可达）。这不表示任何真实选中/下令结果，
- *       也绝不伪造世界状态。真实选中数 / 单位数由第六批的真实世界核心提供。
- */
+/* SELF_AUTHORED_MOCK 仅记录输入桥的调用。三个固定位置用于区分单位与空地，
+ * 桩保留选择标记，不推进游戏逻辑。真实应用使用自己的世界核心。 */
 #include "mock_world.h"
 
-struct yr_world { int dummy; };   /* 哑定义，桥接层只传指针、不解引用 */
+#include <algorithm>
+#include <array>
+
+struct MockUnit { int x, y; bool selected = false; };
+struct yr_world { std::array<MockUnit, 3> units{{{5,5},{7,7},{12,12}}}; };
 static yr_world g_world;
 static std::vector<MockCall> g_log;
 
-extern "C" int yr_world_selected_count(const yr_world *) {
-  g_log.push_back(MockCall{"yr_world_selected_count", {}, 3});
-  return 3;
+static int selected_count(const yr_world* world) {
+  return static_cast<int>(std::count_if(world->units.begin(), world->units.end(),
+    [](const auto& unit) { return unit.selected; }));
 }
 
-extern "C" int yr_world_select_box(yr_world *, int x0, int y0, int x1, int y1, int additive) {
-  g_log.push_back(MockCall{"yr_world_select_box", {x0, y0, x1, y1, additive}, 3});
-  return 3;
+extern "C" int yr_world_select_at(yr_world* world, int x, int y, int toggle) {
+  const auto hit = std::find_if(world->units.begin(), world->units.end(), [x, y](const auto& unit) {
+    return unit.x == x && unit.y == y;
+  });
+  const bool found = hit != world->units.end();
+  if (found) {
+    if (!toggle) for (auto& unit : world->units) unit.selected = false;
+    hit->selected = !toggle || !hit->selected;
+  }
+  g_log.push_back({"yr_world_select_at", {x, y, toggle}, found});
+  return found;
 }
 
-extern "C" int yr_world_order_move(yr_world *, int x, int y) {
-  g_log.push_back(MockCall{"yr_world_order_move", {x, y}, 3});
-  return 3;
+extern "C" int yr_world_select_box(yr_world* world, int x0, int y0, int x1, int y1, int additive) {
+  for (auto& unit : world->units) {
+    const bool inside = unit.x >= std::min(x0, x1) && unit.x <= std::max(x0, x1) &&
+                        unit.y >= std::min(y0, y1) && unit.y <= std::max(y0, y1);
+    unit.selected = inside || (additive && unit.selected);
+  }
+  const int count = selected_count(world);
+  g_log.push_back({"yr_world_select_box", {x0, y0, x1, y1, additive}, count});
+  return count;
+}
+
+extern "C" int yr_world_clear_selection(yr_world* world) {
+  for (auto& unit : world->units) unit.selected = false;
+  g_log.push_back({"yr_world_clear_selection", {}, 0});
+  return 0;
+}
+
+extern "C" int yr_world_order_move(yr_world* world, int x, int y) {
+  const int count = selected_count(world);
+  g_log.push_back({"yr_world_order_move", {x, y}, count});
+  return count;
 }
 
 yr_world *yr_mock_world_handle(void) { return &g_world; }

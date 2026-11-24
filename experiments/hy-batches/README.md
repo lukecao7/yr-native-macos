@@ -12,12 +12,12 @@
 | `p3-window` | RGBA/索引色/RGB565 的 macOS 显示适配 | 离屏输出和像素校验 |
 | `p5-isomap` | INI/Base64/分块地图解码 | 内置自制样本和有界编码测试 |
 | `p20-world-core` | 自制诊断世界、快照、坐标轨迹、静态库 | 1200 个对象、360 步、单／4 线程一致性、占位与负面测试 |
-| `p21-input-bridge` | 框选与移动事件适配 | mock 世界回放、松开终点与 Shift 回归 |
+| `p21-input-bridge` | 框选、点选、移动与清选事件适配 | 松开终点、Shift 增减、左击空地移动、右击清选、右拖逐段卷屏增量 |
 | `p22-app-shell` | AppKit 外壳、可注入帧与事件回调 | 离屏 PNG、事件转换、bundle 和篡改检测 |
 | `verification` | 本地总核验器修复的源码归档 | 拒绝把参数错误和崩溃当作检出；完整总核验仍需未公开的本地产物 |
 
 这些组件分别测试，尚未链接为交互游戏。P20 的通行性、移动和占位是自制诊断规则；
-P21 使用 mock；P22 没有运行窗口事件循环。它们不证明 Windows 行为对齐、完整对局或多核加速。
+P21 用 mock 核对 API 调用，另在 P20 的自制网格验证选中、移动、右拖和清选。P22 测试覆盖 AppKit 事件转换。它们不证明 Windows 行为对齐、完整对局或多核加速。
 4 线程在该短时负载上可能更慢，性能不作为通过条件。
 
 ## 运行
@@ -25,6 +25,7 @@ P21 使用 mock；P22 没有运行窗口事件循环。它们不证明 Windows �
 需要 C++20、Make、Python 3、zlib；原生适配测试还需要 macOS 的 Command Line Tools。
 
 ```sh
+make -C experiments/hy-batches/p21-input-bridge check
 python3 experiments/hy-batches/test_self_authored.py
 # macOS：再检查原生显示适配和 App 外壳；只运行离屏测试。
 python3 experiments/hy-batches/test_self_authored.py --native
@@ -65,6 +66,6 @@ P3 的索引色和 RGB565 离屏导出同样先编码再原子写入，短写返
 ## 来源与范围
 
 代码适用仓库的 GPL-3.0-only 许可，公开源文件的对应关系和哈希见
-[`SOURCE-MANIFEST.json`](SOURCE-MANIFEST.json)。SHP 测试及构建入口经过适配，仅使用自制输入。
+[`SOURCE-MANIFEST.json`](SOURCE-MANIFEST.json)，其中的哈希对应归档时的版本。当前输入夹具与 2D 宿主都用左键下令、右键清选。P22 传递右拖原始事件，P21 可用 `yr_input_set_pan_sink` 接收格坐标增量。SHP 测试及构建入口仅使用自制输入。
 这里保留经核对可独立公开的源码子集。其他依赖私有引擎或原版素材的试验仍在本地保存。
 不包含原版素材、提取地图、原版调色板、私有日志、编译产物或发布权未确认的还原代码。
