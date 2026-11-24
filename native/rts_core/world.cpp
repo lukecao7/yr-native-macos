@@ -90,7 +90,7 @@ bool World::free_at(Cell cell, std::uint8_t preferred, Side team) const noexcept
 }
 
 std::optional<EntityId> World::spawn(UnitKind kind, Side team, Cell position, std::uint8_t preferred) {
-    if (kind >= UnitKind::Count || side_index(team) >= sides.size() || !rules.spec(kind).hp ||
+    if (kind >= UnitKind::Count || house_defeated(team) || !rules.spec(kind).hp ||
         entities.size() >= entity_limit || next_id == std::numeric_limits<EntityId>::max() ||
         !map.walkable(position) || (preferred != whole_cell && preferred >= subcell_offsets.size())) return std::nullopt;
     const auto slot = cell_occupancy(position).reserve(preferred, team);
@@ -111,7 +111,7 @@ std::optional<EntityId> World::spawn(UnitKind kind, Side team, Cell position, st
 }
 
 bool World::apply(const Command& command) {
-    if (result != MatchResult::Running || side_index(command.side) >= sides.size()) return false;
+    if (result != MatchResult::Running || house_defeated(command.side)) return false;
     switch (command.kind) {
     case CommandKind::Select:
     case CommandKind::AssignGroup:
@@ -135,11 +135,14 @@ void World::tick(Navigator& navigator) {
     if (result == MatchResult::Running) {
         tick_economy(*this);
         tick_combat(*this, navigator);
-        std::array<bool, 2> alive{};
-        for (const auto& entity : entities) alive[side_index(entity.side)] |= entity.hp > 0;
-        if (!alive[0] || !alive[1]) {
-            result = alive[0] ? MatchResult::BlueWon : alive[1] ? MatchResult::CopperWon : MatchResult::Draw;
-        }
+        std::uint8_t alive = 0;
+        for (const auto& entity : entities) if (entity.hp)
+            alive |= static_cast<std::uint8_t>(1U << side_index(entity.side));
+        alive &= static_cast<std::uint8_t>(~defeated_houses);
+        const auto count = house_count();
+        if (count > 2) defeated_houses = static_cast<std::uint8_t>(((1U << count) - 1U) & ~alive);
+        if (!alive) result = MatchResult::Draw;
+        else if (std::has_single_bit(alive)) result = victory_for(static_cast<Side>(std::countr_zero(alive)));
     }
     ++step;
 }

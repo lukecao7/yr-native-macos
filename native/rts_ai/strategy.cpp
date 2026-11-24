@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <limits>
 #include <ostream>
 
 namespace coastal::rts::ai {
@@ -46,8 +47,17 @@ std::array<unsigned, static_cast<std::size_t>(UnitKind::Count)> types(const AiMe
 
 }  // namespace
 
+void drive_opponents(World& world, Side player, bool adaptive, std::ostream* audit) {
+    for (std::size_t i = 0; i < world.house_count(); ++i) {
+        const auto opponent = static_cast<Side>(i);
+        if (opponent == player || world.house_defeated(opponent)) continue;
+        if (adaptive || world.side(opponent).ai) drive_adaptive(world, opponent, audit);
+        else drive_scripted(world, opponent);
+    }
+}
+
 void drive_scripted(World& world, Side side, UnitKind doctrine) {
-    if (world.result != MatchResult::Running) return;
+    if (world.result != MatchResult::Running || world.house_defeated(side)) return;
     if (world.step == 0) establish_scripted_base(world, side);
     if (world.step % 150 == 0 && world.side(side).queue.size() < 2) {
         auto train = command(CommandKind::Queue, side);
@@ -56,7 +66,19 @@ void drive_scripted(World& world, Side side, UnitKind doctrine) {
     }
     if (world.step >= 600 && world.step % 180 == 0) {
         auto attack = command(CommandKind::AttackMove, side);
-        attack.target = world.map.starts[1 - side_index(side)];
+        const auto home = world.map.starts[side_index(side)];
+        int closest = std::numeric_limits<int>::max();
+        for (std::size_t i = 0; i < world.house_count(); ++i) {
+            const auto enemy = static_cast<Side>(i);
+            const auto start = world.map.starts[i];
+            if (enemy == side || world.house_defeated(enemy) || !world.map.contains(start)) continue;
+            const int distance = std::max(std::abs(home.x - start.x), std::abs(home.y - start.y));
+            if (distance < closest) {
+                closest = distance;
+                attack.target = start;
+            }
+        }
+        if (attack.target == Cell{}) return;
         for (const auto& unit : world.entities) {
             if (unit.side == side && unit.kind == doctrine) attack.units.push_back(unit.id);
         }
@@ -65,7 +87,7 @@ void drive_scripted(World& world, Side side, UnitKind doctrine) {
 }
 
 void drive_adaptive(World& world, Side side, std::ostream* audit) {
-    if (world.result != MatchResult::Running || world.step % 12 != 0) return;
+    if (world.result != MatchResult::Running || world.step % 12 != 0 || world.house_defeated(side)) return;
     auto& current = world.side(side).ai;
     if (!current) current.emplace();
     auto& memory = *current;

@@ -56,7 +56,7 @@ public:
     WorkerPool& workers() noexcept { return workers_; }
     const StepWork& last_work() const noexcept { return work_; }
     std::span<const std::uint8_t> visibility(Side side) const noexcept {
-        return visible_[side_index(side)];
+        return side_index(side) < visible_houses_ ? std::span<const std::uint8_t>{visible_[side_index(side)]} : std::span<const std::uint8_t>{};
     }
     navigation::FlowCache::Stats flow_stats() const noexcept { return cache_.stats(); }
 
@@ -157,7 +157,8 @@ private:
     WorkerPool workers_;
     SpatialIndex spatial_;
     StepWork work_{};
-    std::array<std::vector<std::uint8_t>, 2> visible_;
+    std::array<std::vector<std::uint8_t>, max_houses> visible_;
+    std::size_t visible_houses_ = 0;
     profiling::Recorder profile_;
 };
 

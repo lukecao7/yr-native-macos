@@ -117,10 +117,8 @@ public:
         if (cycle_views_ && metal_scene_ready_) view_3d_ = world_.step >= 150 && world_.step < 930;
         if (stress_) {
             drive_stress(world_);
-        } else if (adaptive_ || world_.side(rival).ai) {
-            ai::drive_adaptive(world_, rival, audit_ ? &std::cout : nullptr);
         } else {
-            ai::drive_scripted(world_, rival);
+            ai::drive_opponents(world_, player, adaptive_, audit_ ? &std::cout : nullptr);
         }
         const auto started = FrameClock::now();
         world_.tick(navigator_);

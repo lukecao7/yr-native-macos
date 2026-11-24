@@ -90,7 +90,7 @@ const Entity* SpatialIndex::nearest_enemy(const World& world, const Entity& from
         for (int bx = left; bx <= right; ++bx) {
             for (int i = heads_[by * bucket_width_ + bx]; i >= 0; i = next_[i]) {
                 const auto& unit = world.entities[i];
-                if (unit.side == from.side) continue;
+                if (unit.side == from.side || (world.defeated_houses && world.house_defeated(unit.side))) continue;
                 const int distance = std::max(std::abs(unit.position.x - x),
                                               std::abs(unit.position.y - y));
                 if (distance < best_distance ||

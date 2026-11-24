@@ -61,6 +61,7 @@ IndustryPlan plan_industry(const Observation& observation, const AiMemory& memor
 std::vector<Command> plan_tactics(const Observation& observation, const AiMemory& memory,
                                   const ThreatGrid& threat, EntityId scout_id = no_entity);
 
+void drive_opponents(World& world, Side player, bool adaptive, std::ostream* audit = nullptr);
 void drive_adaptive(World& world, Side side, std::ostream* audit = nullptr);
 void drive_scripted(World& world, Side side, UnitKind doctrine = UnitKind::Skirmisher);
 

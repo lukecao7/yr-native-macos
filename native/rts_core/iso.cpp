@@ -91,7 +91,11 @@ constexpr Color highlight = color(224, 244, 237);
 constexpr Color resource_gold = color(235, 180, 89);
 
 Color faction_color(Side side) {
-    return side == Side::Blue ? color(96, 201, 240) : color(236, 146, 103);
+    constexpr std::array<Color, max_houses> colors{
+        color(96, 201, 240), color(236, 146, 103), color(124, 201, 105), color(200, 125, 217),
+        color(244, 216, 107), color(225, 104, 106), color(102, 210, 185), color(203, 203, 208),
+    };
+    return colors[side_index(side)];
 }
 
 class Canvas {
@@ -463,8 +467,8 @@ std::optional<Map> load_map(const std::filesystem::path& path, std::string& erro
                 case '#': tile.terrain = Terrain::Rock; break;
                 case 'o': tile = {Terrain::Deposit, 0, static_cast<std::uint16_t>(deposit_amount)}; break;
                 case 'a':
-                case 'b': {
-                    auto& start = map.starts[row[x] == 'a' ? 0 : 1];
+                case 'b': case 'c': case 'd': case 'e': case 'f': case 'g': case 'h': {
+                    auto& start = map.starts[static_cast<unsigned>(row[x] - 'a')];
                     if (map.contains(start)) {
                         error = "Duplicate start for a side.";
                         return std::nullopt;
@@ -480,7 +484,8 @@ std::optional<Map> load_map(const std::filesystem::path& path, std::string& erro
         }
     }
     if (input.peek() != std::char_traits<char>::eof() || input.bad() ||
-        !map.contains(map.starts[0]) || !map.contains(map.starts[1])) {
+        !map.contains(map.starts[0]) || !map.contains(map.starts[1]) ||
+        std::ranges::any_of(std::span{map.starts}.subspan(map.house_count()), [](Cell cell) { return cell != Cell{}; })) {
         error = "Expected exactly the declared rows and one start per side.";
         return std::nullopt;
     }
@@ -561,7 +566,7 @@ bool render_isometric(const World& world, const Camera& camera, const ViewOverla
     constexpr int maximum_viewport = 16'384;
     if (!valid_map(world.map) || !valid_camera(camera) || width < 1 || height < 1 ||
         width > maximum_viewport || height > maximum_viewport ||
-        std::size_t(width) * height * 4 != rgba.size() || side_index(overlay.side) >= world.sides.size()) {
+        std::size_t(width) * height * 4 != rgba.size() || side_index(overlay.side) >= world.house_count()) {
         return false;
     }
 

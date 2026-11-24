@@ -165,7 +165,7 @@ Observation observe(const World& world, Side side) {
     observation.side = side;
     observation.step = world.step;
     const auto& map = world.map;
-    if (side_index(side) >= world.sides.size() || map.width <= 0 || map.height <= 0 ||
+    if (world.house_defeated(side) || map.width <= 0 || map.height <= 0 ||
         map.width > Map::max_dimension || map.height > Map::max_dimension ||
         map.tiles.size() != std::size_t(map.width) * map.height) return observation;
 
@@ -197,7 +197,7 @@ Observation observe(const World& world, Side side) {
         }
     }
     for (const auto& unit : world.entities) {
-        if (unit.side != side && unit.hp && map.contains(unit.position) &&
+        if (unit.side != side && unit.hp && !world.house_defeated(unit.side) && map.contains(unit.position) &&
             observation.visible[map.index(unit.position)].known) {
             observation.enemies.push_back({unit.id, unit.kind, unit.position, unit.hp, world.step});
         }

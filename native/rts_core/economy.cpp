@@ -79,7 +79,7 @@ const Entity* owned_building(const World& world, Side side, UnitKind kind) noexc
 }
 
 void update_power(World& world) noexcept {
-    std::array<std::uint64_t, 2> supply{}, demand{};
+    std::array<std::uint64_t, max_houses> supply{}, demand{};
     for (const auto& entity : world.entities) {
         if (entity.hp == 0 || !is_building(entity.kind)) continue;
         const auto side = side_index(entity.side);
@@ -87,7 +87,7 @@ void update_power(World& world) noexcept {
         if (power > 0) supply[side] += power;
         else demand[side] += -power;
     }
-    for (std::size_t i = 0; i < world.sides.size(); ++i) {
+    for (std::size_t i = 0; i < world.house_count(); ++i) {
         world.sides[i].power_percent = demand[i] == 0 ? 100 :
             static_cast<std::uint16_t>(std::min<std::uint64_t>(100, 100 * supply[i] / demand[i]));
     }
@@ -346,7 +346,7 @@ std::optional<Rules> load_rules(const std::filesystem::path& path, std::string& 
 }
 
 bool can_build(const World& world, Side side, UnitKind kind, Cell position) noexcept {
-    if (side_index(side) >= world.sides.size() || !is_building(kind) || kind == UnitKind::Hub ||
+    if (world.house_defeated(side) || !is_building(kind) || kind == UnitKind::Hub ||
         !world.map.contains(position) || world.map.at(position).terrain != Terrain::Ground ||
         !world.free_at(position) || world.side(side).funds < world.rules.spec(kind).cost) return false;
     return std::any_of(world.entities.begin(), world.entities.end(), [&](const Entity& entity) {
@@ -355,7 +355,7 @@ bool can_build(const World& world, Side side, UnitKind kind, Cell position) noex
 }
 
 bool apply_economy(World& world, const Command& command) {
-    if (side_index(command.side) >= world.sides.size()) return false;
+    if (world.house_defeated(command.side)) return false;
     auto& side = world.side(command.side);
     switch (command.kind) {
     case CommandKind::Deploy:
@@ -396,7 +396,7 @@ void tick_economy(World& world) {
     update_power(world);
     GatherRoutes routes(world);
     for (auto& collector : world.entities) {
-        if (collector.kind != UnitKind::Collector || collector.hp == 0 ||
+        if (collector.kind != UnitKind::Collector || collector.hp == 0 || world.house_defeated(collector.side) ||
             (collector.order != OrderKind::Idle && collector.order != OrderKind::Gather)) continue;
         switch (collector.gather) {
         case GatherPhase::Seek:
@@ -410,7 +410,10 @@ void tick_economy(World& world) {
             break;
         }
     }
-    for (const auto side : {Side::Blue, Side::Copper}) train(world, side);
+    for (std::size_t i = 0; i < world.house_count(); ++i) {
+        const auto house = static_cast<Side>(i);
+        if (!world.house_defeated(house)) train(world, house);
+    }
 }
 
 }  // namespace coastal::rts
