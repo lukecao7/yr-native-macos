@@ -1,8 +1,8 @@
 #include "flow_cache.h"
-#include "packed_min_heap.h"
 #include "flow_repair.h"
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <exception>
 #include <iterator>
 #include <tuple>
@@ -235,17 +235,28 @@ FlowCache::Field FlowCache::build_field(int width,
     Field result; result.goal=goal; result.map_revision=revision;
     result.distance = std::vector<std::int32_t>(grid.size(), -1);
     if (grid[goal]) return result;
-    detail::PackedMinHeap4 queue;
-    result.distance[goal]=0; queue.emplace(0,goal);
-    while (!queue.empty()) {
-        const auto item=queue.top(); queue.pop();
-        const auto distance=item.first;
-        const auto cell=item.second;
+    // Settled distances are nondecreasing. Each fixed edge cost therefore
+    // generates a sorted queue. The lesser of the two heads is the exact
+    // next Dijkstra distance. Route choice still uses the completed field.
+    using Entry = std::pair<std::int32_t, int>;
+    std::deque<Entry> cardinal, diagonal;
+    result.distance[goal] = 0;
+    cardinal.emplace_back(0, goal);
+    while (!cardinal.empty() || !diagonal.empty()) {
+        const bool use_diagonal = !diagonal.empty() &&
+            (cardinal.empty() || diagonal.front().first < cardinal.front().first);
+        auto& queue = use_diagonal ? diagonal : cardinal;
+        const auto entry = queue.front();
+        queue.pop_front();
+        const auto distance = entry.first;
+        const auto cell = entry.second;
         if (distance!=result.distance[cell]) continue;
         detail::for_masked_flow_neighbour(width,neighbour_masks,cell,[&](int next,std::int32_t edge) {
             const std::int32_t candidate=distance+edge;
             if (result.distance[next]<0 || candidate<result.distance[next]) {
-                result.distance[next]=candidate; queue.emplace(candidate,next);
+                result.distance[next] = candidate;
+                auto& destination = edge == detail::flow_diagonal_cost ? diagonal : cardinal;
+                destination.emplace_back(candidate, next);
             }
         });
     }
