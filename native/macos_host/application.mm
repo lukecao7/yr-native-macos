@@ -9,6 +9,10 @@
 #include "input_view.h"
 #include "metal_presenter.h"
 
+#ifdef COASTAL_FIXTURE_REPLAY
+#include "script_replay.h"
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -556,15 +560,29 @@ int main(int argc, char** argv) {
         try {
             std::vector<std::string_view> arguments(argv + 1, argv + argc);
             std::string error;
+#ifdef COASTAL_FIXTURE_REPLAY
+            auto options = host::parse_launch_options(arguments, error, host::FixtureReplay::Enabled);
+#else
             auto options = host::parse_launch_options(arguments, error);
+#endif
             if (!options) return startup_error(error);
             if (options->help) {
                 std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress [--cycle-views]] [--adaptive-ai]\n";
+#ifdef COASTAL_FIXTURE_REPLAY
+                std::cout << "Windowless fixture replay: --script-file FILE|- --script-output NEW_DIRECTORY "
+                             "with an explicit --data-dir.\n";
+#endif
                 return 0;
             }
 
             if (!options->stress || !options->data_directory.empty()) {
+#ifdef COASTAL_FIXTURE_REPLAY
+                auto directory = options->script_file.empty()
+                    ? host::resolve_data_directory(options->data_directory, error)
+                    : host::validate_data_directory(options->data_directory, error);
+#else
                 auto directory = host::resolve_data_directory(options->data_directory, error);
+#endif
                 if (!directory) return error.empty() ? 0 : startup_error(error);
                 options->data_directory = std::move(*directory);
             }
@@ -578,6 +596,9 @@ int main(int argc, char** argv) {
                 return startup_error("The session reported an invalid viewport or frame interval.");
             }
 
+#ifdef COASTAL_FIXTURE_REPLAY
+            if (!options->script_file.empty()) return host::replay_script(*options, *session);
+#endif
             NSApplication* application = NSApp;
             if (!application) {
                 application = [NSApplication sharedApplication];

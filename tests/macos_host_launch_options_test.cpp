@@ -8,6 +8,7 @@
 #include <system_error>
 #include <unistd.h>
 
+using coastal::macos_host::FixtureReplay;
 using coastal::macos_host::LaunchOptions;
 using coastal::macos_host::parse_launch_options;
 using coastal::macos_host::validate_data_directory;
@@ -45,8 +46,8 @@ void expect(bool passed, std::string_view description) {
 }
 
 std::optional<LaunchOptions> parse(std::initializer_list<std::string_view> args,
-                                   std::string& error) {
-    return parse_launch_options({args.begin(), args.size()}, error);
+                                   std::string& error, FixtureReplay replay = FixtureReplay::Disabled) {
+    return parse_launch_options({args.begin(), args.size()}, error, replay);
 }
 
 void expect_invalid(std::initializer_list<std::string_view> args, std::string_view description) {
@@ -115,6 +116,24 @@ void test_launch_options() {
     expect_invalid({"--help", "--help"}, "Duplicate help flag");
     expect_invalid({"--unknown"}, "Unknown flag");
     expect_invalid({"Demo.map"}, "Unknown positional value");
+
+    expect_invalid({"--data-dir=fixture", "--script-file=-", "--script-output=fresh"},
+                   "The normal executable rejects the fixture script flags");
+    const auto fixture_defaults = parse({}, error, FixtureReplay::Enabled);
+    expect(fixture_defaults && fixture_defaults->script_file.empty() &&
+           fixture_defaults->script_output.empty() && error.empty(), "Fixture default startup stays interactive");
+    const auto replay = parse({"--data-dir=fixture", "--script-file=-", "--script-output", "fresh"},
+                              error, FixtureReplay::Enabled);
+    expect(replay && replay->script_file == "-" && replay->script_output == "fresh" && error.empty(),
+           "Explicit fixture replay from stdin");
+    expect(!parse({"--script-file=commands.jsonl", "--script-output=fresh"}, error, FixtureReplay::Enabled),
+           "Missing data directory is rejected before a picker is possible");
+    expect(!parse({"--data-dir=fixture", "--script-file=commands.jsonl"}, error, FixtureReplay::Enabled),
+           "Replay needs a new output directory");
+    expect(!parse({"--data-dir=fixture", "--script-output=fresh"}, error, FixtureReplay::Enabled),
+           "Replay needs a script source");
+    expect(!parse({"--data-dir=fixture", "--script-file=-", "--script-output=fresh", "--stress"},
+                  error, FixtureReplay::Enabled), "Replay rejects stress mode");
 }
 
 void test_directories() {
