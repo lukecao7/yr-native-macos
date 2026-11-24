@@ -7,6 +7,8 @@
 
 namespace coastal::navigation::detail {
 
+inline constexpr std::int32_t flow_cardinal_cost=1000,flow_diagonal_cost=1414;
+
 struct RepairWork {
     std::uint64_t invalidated = 0;
     std::uint64_t relaxed = 0;
@@ -37,7 +39,7 @@ inline void for_flow_neighbour(int width, int height,
                       !flow_edge_open(width,edges,cell,(z+dz)*width+x) ||
                       !flow_edge_open(width,edges,next,z*width+x+dx) ||
                       !flow_edge_open(width,edges,next,(z+dz)*width+x))) continue;
-        visit(next,std::int32_t((dx&&dz)?1414:1000));
+        visit(next,(dx&&dz)?flow_diagonal_cost:flow_cardinal_cost);
     }
 }
 
@@ -63,7 +65,8 @@ inline void for_masked_flow_neighbour(int width,const std::vector<unsigned char>
     int cell,Visit&& visit) {
     const unsigned mask=masks[cell];
     const std::array<int,8> offset{-width-1,-width,-width+1,-1,1,width-1,width,width+1};
-    constexpr std::array<std::int32_t,8> cost{1414,1000,1414,1000,1000,1414,1000,1414};
+    constexpr std::array cost{flow_diagonal_cost,flow_cardinal_cost,flow_diagonal_cost,flow_cardinal_cost,
+        flow_cardinal_cost,flow_diagonal_cost,flow_cardinal_cost,flow_diagonal_cost};
     for(unsigned bit=0;bit<8;++bit)if(mask&(1U<<bit))visit(cell+offset[bit],cost[bit]);
 }
 
