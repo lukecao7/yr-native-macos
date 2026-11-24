@@ -280,12 +280,13 @@ Intent plan_unit(const World& world, const FlowGrid& grid, const SpatialIndex& s
 
     if (unit.order != OrderKind::Gather && goal == unit.destination &&
         (unit.position == goal || unit.order == OrderKind::Move) &&
-        navigator.can_finish_move(unit.position, goal, occupied(goal))) {
+        navigator.can_finish_move(unit.position, goal, occupied(goal), &unit)) {
         intent.finish_move = true;
         return intent;
     }
     const auto destination_occupied = [&](Cell cell) {
-        return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+        if (unit.subcell == whole_cell) return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+        return !navigator.prepared_slots(cell).reserve(unit.subcell, unit.side);
     };
     intent.goals = route_targets(grid, unit.position, goal, destination_occupied);
     return intent;
@@ -380,13 +381,20 @@ void commit_intents(World& world, const std::vector<Intent>& intents,
         }
         for (std::size_t candidate = 0; candidate < intent.moves.count; ++candidate) {
             const auto step = intent.moves.cells[candidate];
-            if (navigator.transient_occupied(step, unit.id) ||
+            if ((unit.subcell == whole_cell && navigator.transient_occupied(step, unit.id)) ||
                 navigator.transient_crossed(unit.position, step, unit.id) ||
                 !navigator.prepared_step_allowed(unit.id, step)) continue;
             const auto diagonal = diagonal_key(world.map.width, unit.position, step);
             if (diagonal.cell >= 0 &&
                 (committed_diagonals[diagonal.cell] & (1U << (diagonal.direction ^ 1U)))) continue;
-            if (!spatial.claim(step, static_cast<int>(i))) continue;
+            if (unit.subcell == whole_cell) {
+                if (!spatial.claim(step, static_cast<int>(i))) continue;
+            } else {
+                auto slot = spatial.claim_subcell(step, static_cast<int>(i), unit, navigator.prepared_slots(step));
+                if (!slot) continue;
+                unit.previous_subcell = unit.subcell;
+                unit.subcell = *slot;
+            }
             if (diagonal.cell >= 0) committed_diagonals[diagonal.cell] |= 1U << diagonal.direction;
             unit.facing = direction(unit.position, step);
             unit.position = step;
@@ -431,6 +439,7 @@ void Navigator::prepare_bodies(const World& world) {
     for (const auto& body : world.entities) if (body.hp && map.contains(body.position)) {
         const int index = map.index(body.position);
         auto& cell = body_cells_[index];
+        cell.slots.add(body.subcell, body.side);
         if (cell.owner == no_entity && !cell.ambiguous) body_touched_.push_back(index);
         if (body.id == no_entity || cell.owner != no_entity || cell.ambiguous) cell.ambiguous = true;
         else cell.owner = body.id;
@@ -470,6 +479,7 @@ void Navigator::prepare_transient(const Map& map) {
     for (const auto& occupant : transient_occupants_) {
         const int index = map.index(occupant.cell);
         auto& cell = transient_cells_[index];
+        cell.slots.add(occupant.owner ? occupant.subcell : whole_cell, occupant.side);
         if (cell.owner == no_entity && !cell.blocked_for_all) transient_touched_.push_back(index);
         cell.blocks_completion = cell.blocks_completion || occupant.blocks_completion;
         if (occupant.owner == no_entity) cell.blocked_for_all = true;
@@ -528,13 +538,28 @@ bool Navigator::transient_occupied(Cell cell, EntityId ignore) const noexcept {
     return occupancy.blocked_for_all || (occupancy.owner != no_entity && occupancy.owner != ignore);
 }
 
-bool Navigator::can_finish_move(Cell from, Cell goal, bool goal_has_body) const noexcept {
+SubcellOccupancy Navigator::prepared_slots(Cell cell) const noexcept {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_ || body_cells_.empty())
+        return {};
+    const auto index = cell.y * width_ + cell.x;
+    auto slots = body_cells_[index].slots;
+    slots.merge(transient_cells_[index].slots);
+    return slots;
+}
+
+bool Navigator::can_finish_move(Cell from, Cell goal, bool goal_has_body, const Entity* mover) const noexcept {
     const auto contains = [&](Cell cell) {
         return cell.x >= 0 && cell.y >= 0 && cell.x < width_ && cell.y < height_;
     };
     if (!contains(from) || !contains(goal) || transient_cells_.empty()) return false;
     if (from != goal && (!goal_has_body || grid_distance(from, goal) != 1)) return false;
     const auto& occupancy = transient_cells_[goal.y * width_ + goal.x];
+    if (mover && mover->subcell != whole_cell) {
+        if (from == goal) return !transient_owner_moving(mover->id);
+        if (prepared_slots(goal).reserve(mover->subcell, mover->side)) return false;
+        if (!occupancy.slots.reserve(mover->subcell, mover->side) && occupancy.slots.slots != 31)
+            return !occupancy.blocks_completion;
+    }
     return !occupancy.blocked_for_all && !occupancy.blocks_completion;
 }
 
@@ -620,7 +645,13 @@ std::optional<Cell> Navigator::next(const World& world, Cell from, Cell goal, En
 
     const FlowGrid grid{map, blocked_, std::max(minimum_flow_extent, width_),
                         std::max(minimum_flow_extent, height_)};
+    const auto* mover = owner ? world.find(owner) : nullptr;
     const auto occupied = [&](Cell cell) {
+        if (mover && mover->subcell != whole_cell && map.walkable(cell)) {
+            auto slots = world.cell_occupancy(cell, owner);
+            slots.merge(transient_cells_[map.index(cell)].slots);
+            return !slots.reserve(mover->subcell, mover->side);
+        }
         return !world.free_at(cell) || transient_occupied(cell, owner);
     };
     const auto routes = route_targets(grid, from, goal, occupied);
@@ -732,7 +763,8 @@ void tick_combat(World& world, Navigator& navigator) {
     const auto& prepared_cache = std::as_const(navigator.cache_);
     const auto evaluate_move = [&](Intent& intent, const Entity& unit) {
         const auto destination_occupied = [&](Cell cell) {
-            return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+            if (unit.subcell == whole_cell) return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+            return !navigator.prepared_slots(cell).reserve(unit.subcell, unit.side);
         };
         const auto sample = [&](int handle, std::span<const int> cells, auto& values) {
             return sample_field(prepared_cache, handle, cells, values);
@@ -785,7 +817,8 @@ void tick_combat(World& world, Navigator& navigator) {
         if (!intent.moves.incomplete) continue;
         const auto& unit = snapshot.entities[i];
         const auto destination_occupied = [&](Cell cell) {
-            return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+            if (unit.subcell == whole_cell) return occupied(cell) || navigator.transient_occupied(cell, unit.id);
+            return !navigator.prepared_slots(cell).reserve(unit.subcell, unit.side);
         };
         const auto sample = [&](int handle, std::span<const int> cells, auto& values) {
             return sample_route(navigator.cache_, handle, cells, values);

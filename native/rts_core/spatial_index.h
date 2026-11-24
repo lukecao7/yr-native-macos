@@ -11,6 +11,8 @@ public:
     void rebuild(const World& world);
     int at(Cell cell) const noexcept; // Entity vector index, or -1.
     bool claim(Cell cell, int entity_index); // Owner-only, after shared readers join.
+    std::optional<std::uint8_t> claim_subcell(Cell cell, int entity_index, const Entity& unit,
+                                              SubcellOccupancy prepared);
     const Entity* nearest_enemy(const World& world, const Entity& from, int radius) const noexcept;
 
 private:
@@ -20,6 +22,7 @@ private:
     int bucket_width_ = 0;
     std::vector<int> occupants_;
     std::vector<int> occupied_cells_;
+    std::vector<SubcellOccupancy> new_claims_;
     std::vector<int> heads_;
     std::vector<int> next_;
 };

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -65,6 +66,33 @@ struct Map {
 
 enum class Side : std::uint8_t { Blue, Copper };
 constexpr std::size_t side_index(Side side) noexcept { return static_cast<std::size_t>(side); }
+// A body reserves its whole tile unless the owning rules give it a foot slot.
+// A cell has five possible foot positions but only three simultaneous occupants.
+inline constexpr std::uint8_t whole_cell = 255;
+inline constexpr std::array<Cell,5> subcell_offsets{{{128,128},{64,64},{192,64},{64,192},{192,192}}};
+constexpr Cell subcell_offset(std::uint8_t slot) noexcept {
+    return subcell_offsets[slot < subcell_offsets.size() ? slot : 0];
+}
+
+struct SubcellOccupancy {
+    std::uint8_t slots = 0;
+    std::uint8_t owners = 0;
+    void add(std::uint8_t slot, Side side) noexcept {
+        slots |= slot < subcell_offsets.size() ? static_cast<std::uint8_t>(1U << slot) : 31U;
+        owners |= static_cast<std::uint8_t>(1U << side_index(side));
+    }
+    void merge(SubcellOccupancy other) noexcept { slots |= other.slots; owners |= other.owners; }
+    std::optional<std::uint8_t> reserve(std::uint8_t preferred, Side side) const noexcept {
+        if (!slots) return preferred;
+        if (preferred >= subcell_offsets.size() || owners != (1U << side_index(side)) ||
+            std::popcount(slots) >= 3) return std::nullopt;
+        for (unsigned i = 0; i < subcell_offsets.size(); ++i) {
+            const auto slot = static_cast<std::uint8_t>((preferred + i) % subcell_offsets.size());
+            if (!(slots & (1U << slot))) return slot;
+        }
+        return std::nullopt;
+    }
+};
 using EntityId = std::uint32_t;
 constexpr EntityId no_entity = 0;
 
@@ -123,6 +151,7 @@ struct Entity {
     std::uint16_t cargo = 0;
     std::uint16_t work = 0;
     EntityId focus = no_entity;
+    std::uint8_t subcell = whole_cell, previous_subcell = whole_cell;
 };
 
 struct Projectile {
@@ -218,8 +247,9 @@ struct World {
     // Optional owner-only refresh after editing the sorted entity vector.
     // Lookups verify each hint against the live vector and remain read-only.
     void refresh_entity_index() noexcept;
-    bool free_at(Cell cell) const noexcept;
-    std::optional<EntityId> spawn(UnitKind kind, Side side, Cell position);
+    SubcellOccupancy cell_occupancy(Cell cell, EntityId ignore = no_entity) const noexcept;
+    bool free_at(Cell cell, std::uint8_t preferred = whole_cell, Side side = Side::Blue) const noexcept;
+    std::optional<EntityId> spawn(UnitKind kind, Side side, Cell position, std::uint8_t preferred = whole_cell);
     bool apply(const Command& command);
     void tick(Navigator& navigator);
     std::uint32_t random();

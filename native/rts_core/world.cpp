@@ -74,23 +74,34 @@ void World::index_appended_entity() noexcept {
     slots[entities[index].id & (slots.size() - 1)] = static_cast<std::uint16_t>(index);
 }
 
-bool World::free_at(Cell cell) const noexcept {
-    return map.walkable(cell) &&
-           std::none_of(entities.begin(), entities.end(), [cell](const Entity& entity) {
-               return entity.position == cell && entity.hp > 0;
-           });
+SubcellOccupancy World::cell_occupancy(Cell cell, EntityId ignore) const noexcept {
+    SubcellOccupancy occupied;
+    for (const auto& body : entities)
+        if (body.hp && body.id != ignore && body.position == cell) occupied.add(body.subcell, body.side);
+    return occupied;
 }
 
-std::optional<EntityId> World::spawn(UnitKind kind, Side team, Cell position) {
+bool World::free_at(Cell cell, std::uint8_t preferred, Side team) const noexcept {
+    if (!map.walkable(cell)) return false;
+    if (preferred == whole_cell) return std::none_of(entities.begin(), entities.end(), [cell](const Entity& body) {
+        return body.hp && body.position == cell;
+    });
+    return preferred < subcell_offsets.size() && cell_occupancy(cell).reserve(preferred, team).has_value();
+}
+
+std::optional<EntityId> World::spawn(UnitKind kind, Side team, Cell position, std::uint8_t preferred) {
     if (kind >= UnitKind::Count || side_index(team) >= sides.size() || !rules.spec(kind).hp ||
         entities.size() >= entity_limit || next_id == std::numeric_limits<EntityId>::max() ||
-        !free_at(position)) return std::nullopt;
+        !map.walkable(position) || (preferred != whole_cell && preferred >= subcell_offsets.size())) return std::nullopt;
+    const auto slot = cell_occupancy(position).reserve(preferred, team);
+    if (!slot) return std::nullopt;
     const EntityId id = next_id;
     Entity value{};
     value.id = id;
     value.kind = kind;
     value.side = team;
     value.position = position;
+    value.subcell = value.previous_subcell = *slot;
     value.hp = rules.spec(kind).hp;
     if (team == Side::Copper) value.facing = {-1, 0};
     entities.push_back(value);

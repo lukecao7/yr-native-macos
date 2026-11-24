@@ -13,8 +13,9 @@ void SpatialIndex::rebuild(const World& world) {
     const int height = valid ? world.map.height : 0;
     if (width != width_ || height != height_) {
         occupants_.assign(std::size_t(width) * height, -1);
+        new_claims_.assign(occupants_.size(), {});
     } else {
-        for (const int cell : occupied_cells_) occupants_[cell] = -1;
+        for (const int cell : occupied_cells_) { occupants_[cell] = -1; new_claims_[cell] = {}; }
     }
     occupied_cells_.clear();
     occupied_cells_.reserve(2 * world.entities.size());
@@ -53,7 +54,23 @@ bool SpatialIndex::claim(Cell cell, int entity_index) {
     if (occupants_[index] != -1) return false;
     occupied_cells_.push_back(index);
     occupants_[index] = entity_index;
+    new_claims_[index].add(whole_cell, Side::Blue);
     return true;
+}
+
+std::optional<std::uint8_t> SpatialIndex::claim_subcell(Cell cell, int entity_index, const Entity& unit,
+                                                         SubcellOccupancy prepared) {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= width_ || cell.y >= height_) return std::nullopt;
+    const auto index = cell.y * width_ + cell.x;
+    prepared.merge(new_claims_[index]);
+    auto slot = prepared.reserve(unit.subcell, unit.side);
+    if (!slot) return std::nullopt;
+    if (occupants_[index] == -1) {
+        occupied_cells_.push_back(index);
+        occupants_[index] = entity_index;
+    }
+    new_claims_[index].add(*slot, unit.side);
+    return slot;
 }
 
 const Entity* SpatialIndex::nearest_enemy(const World& world, const Entity& from,
