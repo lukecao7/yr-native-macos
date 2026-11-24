@@ -5,11 +5,16 @@
 #include "economy.h"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace coastal::rts {
 namespace {
+
+constexpr auto empty_entity_index = std::numeric_limits<std::uint16_t>::max();
+static_assert(World::entity_limit < empty_entity_index);
 
 auto entity_position(const std::vector<Entity>& entities, EntityId id) noexcept {
     return std::lower_bound(entities.begin(), entities.end(), id,
@@ -19,7 +24,13 @@ auto entity_position(const std::vector<Entity>& entities, EntityId id) noexcept 
 }  // namespace
 
 const Entity* World::find(EntityId id) const noexcept {
-    if (!entities.empty() && id >= entities.front().id) {
+    if (entities.empty()) return nullptr;
+    const auto& slots = entity_index_.slots;
+    if (!slots.empty()) {
+        const auto index = slots[id & (slots.size() - 1)];
+        if (index < entities.size() && entities[index].id == id) return &entities[index];
+    }
+    if (id >= entities.front().id) {
         const auto index = std::size_t(id - entities.front().id);
         if (index < entities.size() && entities[index].id == id) return &entities[index];
     }
@@ -29,6 +40,38 @@ const Entity* World::find(EntityId id) const noexcept {
 
 Entity* World::find(EntityId id) noexcept {
     return const_cast<Entity*>(std::as_const(*this).find(id));
+}
+
+void World::refresh_entity_index() noexcept {
+    const auto size = entities.size();
+    auto& slots = entity_index_.slots;
+    if (!size || size > entity_limit || entities.back().id - entities.front().id == size - 1) {
+        slots.clear();
+        return; // The contiguous-ID lookup already covers this roster.
+    }
+    // Size by population, up to 4*entity_limit slots, regardless of how far
+    // apart IDs are. Old slots may remain since a lookup verifies the ID.
+    const auto target_size = std::bit_ceil(std::max<std::size_t>(16, size * 4));
+    if (slots.size() < target_size) {
+        try {
+            slots.resize(target_size, empty_entity_index);
+        } catch (const std::bad_alloc&) {
+            return; // The sorted lookup still works.
+        }
+    }
+    const auto mask = slots.size() - 1;
+    for (std::size_t i = 0; i < size; ++i)
+        slots[entities[i].id & mask] = static_cast<std::uint16_t>(i);
+}
+
+void World::index_appended_entity() noexcept {
+    auto& slots = entity_index_.slots;
+    if (slots.size() < entities.size() * 2) {
+        refresh_entity_index();
+        return;
+    }
+    const auto index = entities.size() - 1;
+    slots[entities[index].id & (slots.size() - 1)] = static_cast<std::uint16_t>(index);
 }
 
 bool World::free_at(Cell cell) const noexcept {
@@ -52,6 +95,7 @@ std::optional<EntityId> World::spawn(UnitKind kind, Side team, Cell position) {
     if (team == Side::Copper) value.facing = {-1, 0};
     entities.push_back(value);
     ++next_id;
+    index_appended_entity();
     return id;
 }
 

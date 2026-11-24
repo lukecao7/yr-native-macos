@@ -215,11 +215,26 @@ struct World {
     const SideState& side(Side value) const noexcept { return sides[side_index(value)]; }
     Entity* find(EntityId id) noexcept;
     const Entity* find(EntityId id) const noexcept;
+    // Optional owner-only refresh after editing the sorted entity vector.
+    // Lookups verify each hint against the live vector and remain read-only.
+    void refresh_entity_index() noexcept;
     bool free_at(Cell cell) const noexcept;
     std::optional<EntityId> spawn(UnitKind kind, Side side, Cell position);
     bool apply(const Command& command);
     void tick(Navigator& navigator);
     std::uint32_t random();
+
+private:
+    class EntityIndex {
+        friend struct World;
+        std::vector<std::uint16_t> slots;
+    };
+    void index_appended_entity() noexcept;
+
+public:
+    // Derived scratch is omitted from snapshots. A trailing opaque member
+    // preserves public aggregate initialization of the actual world fields.
+    EntityIndex entity_index_{};
 };
 
 }  // namespace coastal::rts

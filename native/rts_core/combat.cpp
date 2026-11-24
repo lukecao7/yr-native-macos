@@ -63,6 +63,7 @@ void advance_projectiles(World& world) {
     });
 
     if (!std::erase_if(world.entities, [](const Entity& unit) { return unit.hp == 0; })) return;
+    world.refresh_entity_index();
     for (SideState& side : world.sides) {
         const auto retire = [&](std::vector<EntityId>& group) {
             std::erase_if(group, [&](EntityId id) { return !world.find(id); });
