@@ -171,6 +171,7 @@ public:
                 view_3d_ = !view_3d_;
                 drag_.reset();
                 orbit_drag_.reset();
+                right_drag_.reset();
                 return;
             }
             if (pan_key(event.key_code) || event.repeat || stress_) return;
@@ -188,6 +189,7 @@ public:
         hover_.reset();
         drag_.reset();
         orbit_drag_.reset();
+        right_drag_.reset();
     }
 
 private:
@@ -238,6 +240,87 @@ private:
                   << "}\n";
     }
 
+    void classic_right(PointerEvent::Phase phase, PixelPoint point) {
+        using Phase = PointerEvent::Phase;
+        if (phase == Phase::Down) {
+            right_drag_ = SelectionBox{point, point};
+            right_panned_ = false;
+            drag_.reset();
+            return;
+        }
+        if (!right_drag_ || (phase != Phase::Drag && phase != Phase::Up)) return;
+        const auto previous = right_drag_->end;
+        right_drag_->end = point;
+        if (right_panned_ || is_drag(*right_drag_)) {
+            const auto from = right_panned_ ? previous : right_drag_->start;
+            right_panned_ = true;
+            camera_.target_x = camera_.x;
+            camera_.target_y = camera_.y;
+            camera_.pan(point.x - from.x, point.y - from.y);
+            camera_.x = camera_.target_x;
+            camera_.y = camera_.target_y;
+        }
+        if (phase == Phase::Up) {
+            if (!right_panned_) {
+                if (build_kind_ || rally_mode_) {
+                    build_kind_.reset();
+                    rally_mode_ = false;
+                } else {
+                    world_.apply(order(CommandKind::Select, player));
+                }
+            }
+            right_drag_.reset();
+        }
+    }
+
+    void classic_click(PixelPoint point, InputModifiers modifiers) {
+        const auto& selected = world_.side(player).selected;
+        const auto cell = pick_cell(world_.map, camera_, point, width, height);
+        const bool force_move = has_modifier(modifiers, Modifier::Option);
+        const auto* hit = force_move ? nullptr : world_.find(pick_entity(world_, camera_, point, width, height));
+        if (hit && hit->side == player) {
+            const auto member = std::lower_bound(selected.begin(), selected.end(), hit->id);
+            const bool already_selected = member != selected.end() && *member == hit->id;
+            const bool shift = has_modifier(modifiers, Modifier::Shift);
+            if (!shift && already_selected) {
+                if (hit->kind == UnitKind::Pioneer) {
+                    auto deploy = order(CommandKind::Deploy, player);
+                    deploy.units = {hit->id};
+                    deploy.target = hit->position;
+                    world_.apply(deploy);
+                }
+                return;
+            }
+            auto select = order(CommandKind::Select, player);
+            if (shift && already_selected) {
+                select.units = selected;
+                select.units.erase(select.units.begin() + (member - selected.begin()));
+            } else {
+                select.add = shift;
+                select.units = {hit->id};
+            }
+            world_.apply(select);
+            return;
+        }
+        if (selected.empty()) return;
+        if (hit) {
+            auto attack = order(CommandKind::AttackMove, player);
+            attack.target = hit->position;
+            attack.focus = hit->id;
+            for (const auto id : selected) {
+                const auto* unit = world_.find(id);
+                if (unit && world_.rules.spec(unit->kind).damage) attack.units.push_back(id);
+            }
+            if (!attack.units.empty()) world_.apply(attack);
+            return;
+        }
+        if (!cell) return;
+        const auto* only = selected.size() == 1 ? world_.find(selected.front()) : nullptr;
+        auto ground = order(only && only->kind == UnitKind::Workshop ? CommandKind::Rally : CommandKind::Move, player);
+        ground.target = *cell;
+        world_.apply(ground);
+    }
+
     void handle_pointer(PointerEvent event) {
         using Phase = PointerEvent::Phase;
         if (event.phase == Phase::Leave) {
@@ -259,7 +342,11 @@ private:
         }
         if (stress_) return;
 
-        if (event.button == 1 && event.phase == Phase::Up) {
+        if (event.button == 1 && !view_3d_) {
+            classic_right(event.phase, *point);
+            return;
+        }
+        if (view_3d_ && event.button == 1 && event.phase == Phase::Up) {
             if (build_kind_ || rally_mode_) {
                 build_kind_.reset();
                 rally_mode_ = false;
@@ -290,7 +377,8 @@ private:
                 }
             } else if (drag_) {
                 drag_->end = *point;
-                select(*drag_, has_modifier(event.modifiers, Modifier::Shift));
+                if (!view_3d_ && !is_drag(*drag_)) classic_click(*point, event.modifiers);
+                else select(*drag_, has_modifier(event.modifiers, Modifier::Shift));
             }
             drag_.reset();
         }
@@ -338,7 +426,7 @@ private:
             orbit_.advance();
             return;
         }
-        if (hover_ && !drag_) {
+        if (hover_ && !drag_ && !right_drag_) {
             constexpr int border = 14;
             const auto scroll = [](int pixel, int extent) {
                 return pixel < border ? 8 : pixel >= extent - border ? -8 : 0;
@@ -469,6 +557,8 @@ private:
     std::uint64_t mixed_steps_ = 0;
     std::optional<PixelPoint> hover_;
     std::optional<PixelPoint> orbit_drag_;
+    std::optional<SelectionBox> right_drag_;
+    bool right_panned_ = false;
     std::optional<SelectionBox> drag_;
     std::optional<UnitKind> build_kind_;
     bool rally_mode_ = false;
