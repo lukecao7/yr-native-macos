@@ -47,6 +47,9 @@ static const int kCellPx = 24; /* SELF_AUTHORED_MAPPING: 每 cell 24 像素 */
 - (void)rightMouseDown:(NSEvent *)e {
     YrShellHandleNSEvent(e, kCellPx, (int)self.bounds.size.height);
 }
+- (void)rightMouseDragged:(NSEvent *)e {
+    YrShellHandleNSEvent(e, kCellPx, (int)self.bounds.size.height);
+}
 - (void)rightMouseUp:(NSEvent *)e {
     YrShellHandleNSEvent(e, kCellPx, (int)self.bounds.size.height);
 }

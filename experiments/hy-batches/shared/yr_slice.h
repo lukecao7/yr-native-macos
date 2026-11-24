@@ -59,6 +59,8 @@ const char *yr_world_implementation_notice(const yr_world *w);
 /* 选择：框选 [x0,x1]×[y0,y1]（端点包含，自动归一化），
  * additive=1 时并入已有选择，=0 时先清空。返回选中单位数。 */
 int  yr_world_select_box(yr_world *w, int x0, int y0, int x1, int y1, int additive);
+/* 点到单位时选择它，toggle=1 时切换其选择。返回 1 表示命中。空地返回 0 并保留选择。 */
+int  yr_world_select_at(yr_world *w, int x, int y, int toggle);
 int  yr_world_selected_count(const yr_world *w);
 int  yr_world_clear_selection(yr_world *w);
 
@@ -101,7 +103,8 @@ enum {
   YR_EVT_RIGHT_DOWN = 4,
   YR_EVT_RIGHT_UP = 5,
   YR_EVT_KEY_DOWN = 6,
-  YR_EVT_KEY_UP = 7
+  YR_EVT_KEY_UP = 7,
+  YR_EVT_RIGHT_DRAG = 8
 };
 
 enum { YR_MOD_SHIFT = 1, YR_MOD_CONTROL = 2, YR_MOD_ALT = 4 };
@@ -115,15 +118,18 @@ typedef struct {
 } yr_event;
 
 typedef struct yr_input_state yr_input_state;
+typedef void (*yr_input_pan_sink)(int64_t dx, int64_t dy, void *userdata);
 
 yr_input_state *yr_input_state_create(void);
 void yr_input_state_destroy(yr_input_state *s);
 void yr_input_state_reset(yr_input_state *s);
+/* 右拖时同步投递相邻事件的格坐标差。reset 保留回调，传入空指针可解除绑定。 */
+void yr_input_set_pan_sink(yr_input_state *s, yr_input_pan_sink sink, void *userdata);
 
 /* 消费一个事件，按需调用 yr_world_select_box / yr_world_order_move 等。
  * 返回本次产生的世界 API 调用次数；非法事件返回 -1。
- * 语义：LEFT_DOWN 起框、LEFT_DRAG 更新框、LEFT_UP 提交框选（Shift 加选）、
- *       RIGHT_DOWN 若已有选中则对落点下令移动。
+ * 左键拖框，左击单位选择（Shift 增减），左击空地向选中单位下达移动命令。
+ * 右键单击清空选择。右拖产生卷屏增量，松开时维持已有选择。
  * 未实现/证据不足的操作必须返回 -1 且不得伪造世界状态变化。 */
 int yr_input_dispatch(yr_world *w, const yr_event *ev, yr_input_state *s);
 

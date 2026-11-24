@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "source": "SELF_AUTHORED",
-  "note": "自制事件序列（SELF_AUTHORED），非原版 Windows 事件取证；用于回放本桥接层。yr_event.type 取 shared/yr_slice.h 枚举整数值：1=LEFT_DOWN 2=LEFT_UP 3=LEFT_DRAG 4=RIGHT_DOWN 5=RIGHT_UP 6=KEY_DOWN 7=KEY_UP；modifiers 位 1=SHIFT。S1-S4 为 event_map.json 中 4 条 mapped 操作的完整 yr_events 展开；N1-N4 为自制非法 / 证据不足事件，要求 dispatch 返回 -1 且不产生任何世界调用。本序列不含浮点，供 replay_host 的极简解析器读取。",
+  "note": "自制事件序列。类型取 shared/yr_slice.h 枚举值，1=LEFT_DOWN、2=LEFT_UP、3=LEFT_DRAG、4=RIGHT_DOWN、5=RIGHT_UP、6=KEY_DOWN、7=KEY_UP、8=RIGHT_DRAG。修饰位 1 表示 Shift。S1–S6 验证框选、增减选、左键移动、单选、右拖往返与右键清选。N1–N4 验证非法或未实现事件返回 -1，世界调用数为零。",
   "sequences": [
     {
       "seq_id": "S1",
@@ -18,7 +18,7 @@
       "seq_id": "S2",
       "action_id": "shift_add_select",
       "bridge_support": "mapped",
-      "note": "Shift 加选：单击带 SHIFT(modifiers=1) → LEFT_UP 提交 additive=1 → yr_world_select_box(7,7,7,7,1)",
+      "note": "Shift 加选：单击带 SHIFT(modifiers=1) → LEFT_UP 切换点中的单位 → yr_world_select_at(7,7,1)",
       "events": [
         {"type": 1, "x": 7, "y": 7, "modifiers": 1, "click_count": 1, "key_code": -1},
         {"type": 2, "x": 7, "y": 7, "modifiers": 1, "click_count": 1, "key_code": -1}
@@ -26,21 +26,44 @@
     },
     {
       "seq_id": "S3",
-      "action_id": "right_click_move",
+      "action_id": "left_click_move",
       "bridge_support": "mapped",
-      "note": "右键下令：RIGHT_DOWN 先查 yr_world_selected_count、再对落点 yr_world_order_move(30,40)",
+      "note": "左击空地：LEFT_UP 对空地 (30,40) 下达移动命令",
       "events": [
-        {"type": 4, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1}
+        {"type": 1, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 2, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1}
       ]
     },
     {
       "seq_id": "S4",
       "action_id": "left_click_select",
       "bridge_support": "mapped",
-      "note": "单击选单位：LEFT_DOWN/LEFT_UP 点框 → yr_world_select_box(5,5,5,5,0)",
+      "note": "单击选单位：LEFT_DOWN/LEFT_UP 点中单位 → yr_world_select_at(5,5,0)",
       "events": [
         {"type": 1, "x": 5, "y": 5, "modifiers": 0, "click_count": 1, "key_code": -1},
         {"type": 2, "x": 5, "y": 5, "modifiers": 0, "click_count": 1, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "S5",
+      "action_id": "right_drag_and_return",
+      "bridge_support": "mapped",
+      "note": "拖出后回到按下的地格，卷屏回调报告每段位移，当前选择保持。",
+      "events": [
+        {"type": 4, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 8, "x": 34, "y": 43, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 8, "x": 32, "y": 41, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 5, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1}
+      ]
+    },
+    {
+      "seq_id": "S6",
+      "action_id": "right_click_clear",
+      "bridge_support": "mapped",
+      "note": "右键按下不改变选择，原地松开后清空选择。",
+      "events": [
+        {"type": 4, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1},
+        {"type": 5, "x": 30, "y": 40, "modifiers": 0, "click_count": 1, "key_code": -1}
       ]
     },
     {
@@ -63,9 +86,9 @@
     },
     {
       "seq_id": "N3",
-      "action_id": "illegal_right_up",
+      "action_id": "unmatched_right_up",
       "bridge_support": "unsupported",
-      "note": "自制 RIGHT_UP：yr_slice.h 未定义其语义，dispatch 应返回 -1 且无世界调用",
+      "note": "未先按下右键便松开，dispatch 应返回 -1 且无世界调用",
       "events": [
         {"type": 5, "x": 12, "y": 12, "modifiers": 0, "click_count": 1, "key_code": -1}
       ]

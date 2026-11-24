@@ -73,6 +73,10 @@ int main(int argc, char **argv) {
   yr_world *w = yr_mock_world_handle();
   yr_input_state *s = yr_input_state_create();
   yr_mock_world_log_clear();
+  struct Pan { int64_t dx = 0, dy = 0; } pan;
+  yr_input_set_pan_sink(s, [](int64_t dx, int64_t dy, void *userdata) {
+    *static_cast<Pan*>(userdata) = {dx, dy};
+  }, &pan);
 
   const JVal &seqs = root.at("sequences");
   int total_events = 0, total_calls = 0;
@@ -96,6 +100,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> ev_blocks;
     for (size_t ei = 0; ei < events.a.size(); ++ei) {
       yr_event ev = to_event(events.a[ei]);
+      pan = {};
       int before = yr_mock_world_log_size();
       /* 停止测试：--no-dispatch 时真实跳过 yr_input_dispatch，绝不调用任何 yr_world_*。 */
       int r = no_dispatch ? 0 : yr_input_dispatch(w, &ev, s);
@@ -110,6 +115,7 @@ int main(int argc, char **argv) {
          << ", \"click_count\": " << ev.click_count
          << ", \"key_code\": " << ev.key_code << "}"
          << ", \"dispatch_return\": " << r
+         << ", \"pan_delta\": [" << pan.dx << ", " << pan.dy << "]"
          << ", \"world_calls\": [";
       for (int ci = before; ci < after; ++ci) {
         const MockCall *c = yr_mock_world_log_at(ci);
@@ -137,7 +143,7 @@ int main(int argc, char **argv) {
   o << "{\n"
     << "  \"schema_version\": \"1.0\",\n"
     << "  \"source\": \"SELF_AUTHORED_MOCK\",\n"
-    << "  \"mock_notice\": \"yr_world_* 由 SELF_AUTHORED_MOCK 提供；未与真实世界核心链接，将在第六批集成\",\n"
+    << "  \"mock_notice\": \"此调用日志使用 SELF_AUTHORED_MOCK。P20 实际世界另由 world_input_regression 验证。\",\n"
     << "  \"sequences\": [\n";
   for (size_t i = 0; i < seq_blocks.size(); ++i) {
     o << seq_blocks[i];
