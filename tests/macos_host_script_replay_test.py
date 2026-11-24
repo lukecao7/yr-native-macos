@@ -40,6 +40,11 @@ def validate(program, work):
         {"op": "key", "phase": "up", "code": 49, "chars": " "},
         {"op": "frame", "count": 2, "capture": "frames/updated.png"},
         {"op": "capture", "capture": "repeat.png"},
+        {"op": "scroll", "x": 420, "y": 280, "deltaY": -4.5, "modifiers": 1 << 18, "precise": True},
+        {"op": "frame", "count": 1, "capture": "frames/scrolled.png"},
+        {"op": "scroll", "x": 420, "y": 280, "deltaY": -4.5, "scrollingDeltaY": 0,
+         "modifiers": 1 << 18, "phase": 1, "momentumPhase": 4, "inverted": True},
+        {"op": "frame", "count": 1, "capture": "frames/zero-scroll.png"},
         {"op": "quit"},
         {"op": "unreachable"},
     )
@@ -49,19 +54,25 @@ def validate(program, work):
     from_file, file_rows = replay(program, fixture, file_output, command_file)
     from_stdin, stdin_rows = replay(program, fixture, stdin_output, "-", commands)
     assert from_file.returncode == from_stdin.returncode == 0, (from_file.stderr, from_stdin.stderr)
-    assert file_rows == stdin_rows and len(file_rows) == 9, (file_rows, stdin_rows)
+    assert file_rows == stdin_rows and len(file_rows) == 13, (file_rows, stdin_rows)
     assert all(row["ok"] and row["id"] == index for index, row in enumerate(file_rows, start=1))
     assert file_rows[0]["frameIndex"] is None and file_rows[0]["viewportWidth"] == 1024
     assert file_rows[1]["advanced"] == 1 and file_rows[1]["frameIndex"] == 0
     assert [row["frameIndex"] for row in file_rows[2:6]] == [0] * 4
     assert file_rows[6]["advanced"] == 2 and file_rows[6]["frameIndex"] == 2
     assert file_rows[7]["frameIndex"] == 2
+    assert [row["frameIndex"] for row in file_rows[8:12]] == [2, 3, 3, 4]
     initial = (file_output / "frames/initial.png").read_bytes()
     updated = (file_output / "frames/updated.png").read_bytes()
     assert initial.startswith(b"\x89PNG\r\n\x1a\n") and initial != updated
     assert updated == (file_output / "repeat.png").read_bytes()
     assert initial == (stdin_output / "frames/initial.png").read_bytes()
     assert updated == (stdin_output / "frames/updated.png").read_bytes()
+    scrolled = (file_output / "frames/scrolled.png").read_bytes()
+    assert scrolled != updated, "Scroll input did not change the fixture zoom."
+    assert scrolled == (file_output / "frames/zero-scroll.png").read_bytes()
+    assert scrolled == (stdin_output / "frames/scrolled.png").read_bytes()
+    assert scrolled == (stdin_output / "frames/zero-scroll.png").read_bytes()
 
     pointer_only = script(
         {"op": "frame", "count": 1},
@@ -87,11 +98,15 @@ def validate(program, work):
         {"op": "capture", "capture": "premature.png"},
         {"op": "frame", "count": 1, "capture": "first.png"},
         {"op": "capture", "capture": "first.png"},
+        {"op": "scroll", "x": 420, "deltaY": 6},
+        {"op": "scroll", "x": 420, "y": 280, "scrollingDeltaY": "6"},
+        {"op": "scroll", "x": 420, "y": 280, "momentumPhase": 1 << 32},
+        {"op": "scroll", "x": 420, "y": 280, "precise": 1},
         {"op": "quit"},
     )
     rejected, bad_rows = replay(program, fixture, rejected_output, "-", invalid)
     assert rejected.returncode == 1
-    assert [row["ok"] for row in bad_rows] == [False, False, True, False, True], bad_rows
+    assert [row["ok"] for row in bad_rows] == [False, False, True, False, False, False, False, False, True], bad_rows
     assert bad_rows[0]["advanced"] == 0
     assert sorted(path.name for path in rejected_output.iterdir()) == ["first.png"]
     assert not (work / "outside.png").exists()
@@ -104,7 +119,7 @@ def validate(program, work):
 def main():
     with tempfile.TemporaryDirectory(prefix="coastal-script-test-") as temporary:
         validate(Path(sys.argv[1]).resolve(), Path(temporary))
-    print("Windowless fixture replay passed for file, stdin, captures and rejected output paths.")
+    print("Windowless fixture replay passed for file, stdin, input, captures and rejected commands.")
 
 
 if __name__ == "__main__":

@@ -84,13 +84,15 @@ std::uint64_t unsigned_field(NSDictionary* request, NSString* name,
     invalid_field(name, "an unsigned integer in range");
 }
 
-double coordinate(NSDictionary* request, NSString* name) {
+double finite_number(NSDictionary* request, NSString* name,
+                     std::optional<double> fallback = std::nullopt) {
     id value = request[name];
+    if (!value && fallback) return *fallback;
     if ([value isKindOfClass:NSNumber.class] && !is_boolean(value)) {
         const auto number = [value doubleValue];
         if (std::isfinite(number)) return number;
     }
-    invalid_field(name, "a finite pixel coordinate");
+    invalid_field(name, "a finite number");
 }
 
 bool boolean_field(NSDictionary* request, NSString* name) {
@@ -252,9 +254,22 @@ private:
             constexpr auto max_pointer_value = std::numeric_limits<std::uint32_t>::max();
             session_.pointer_event({phase,
                 static_cast<std::uint32_t>(unsigned_field(request, @"button", 0, max_pointer_value)),
-                coordinate(request, @"x"), coordinate(request, @"y"),
+                finite_number(request, @"x"), finite_number(request, @"y"),
                 unsigned_field(request, @"modifiers", 0),
                 static_cast<std::uint32_t>(unsigned_field(request, @"clickCount", clicking ? 1 : 0, max_pointer_value))});
+        } else if (op == "scroll") {
+            const auto delta_x = finite_number(request, @"deltaX", 0);
+            const auto delta_y = finite_number(request, @"deltaY", 0);
+            constexpr auto max_phase = std::numeric_limits<std::uint32_t>::max();
+            session_.scroll_event({
+                finite_number(request, @"x"), finite_number(request, @"y"), delta_x, delta_y,
+                finite_number(request, @"scrollingDeltaX", delta_x),
+                finite_number(request, @"scrollingDeltaY", delta_y),
+                unsigned_field(request, @"modifiers", 0),
+                static_cast<std::uint32_t>(unsigned_field(request, @"phase", 0, max_phase)),
+                static_cast<std::uint32_t>(unsigned_field(request, @"momentumPhase", 0, max_phase)),
+                boolean_field(request, @"precise"), boolean_field(request, @"inverted"),
+            });
         } else if (op == "key") {
             const auto chars = text_field(request, @"chars", true);
             const auto plain = request[@"charsIgnoringModifiers"] ? text_field(request, @"charsIgnoringModifiers") : chars;

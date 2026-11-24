@@ -71,12 +71,15 @@ python3 tests/macos_host_fixture_data.py "$fixture_dir"
 {"id":1,"op":"frame","count":1,"capture":"before.png"}
 {"id":2,"op":"pointer","phase":"down","x":420,"y":280}
 {"id":3,"op":"pointer","phase":"up","x":420,"y":280}
-{"id":4,"op":"frame","count":1,"capture":"after.png"}
-{"id":5,"op":"quit"}
+{"id":4,"op":"scroll","x":420,"y":280,"deltaY":-4.5,"modifiers":262144,"precise":true}
+{"id":5,"op":"frame","count":1,"capture":"after.png"}
+{"id":6,"op":"quit"}
 JSONL
 ```
 
 也可以将命令写到文件，并把 `--script-file -` 换成 `--script-file commands.jsonl`。每条命令返回一行 `COASTAL_SCRIPT` 和对应的 JSON。`frame` 每次推进 1 至 600 帧，`capture` 写出最近一帧，`state` 返回视口大小与当前帧号。PNG 路径相对于新输出目录，已有文件会保留。
+
+`scroll` 需要视口坐标 `x` 和 `y`。`deltaX`、`deltaY` 默认为零，`scrollingDeltaX`、`scrollingDeltaY` 默认沿用对应的原始增量。可选字段 `modifiers`、`phase`、`momentumPhase` 默认为零，`precise`、`inverted` 默认为 `false`。上例用 Ctrl 加滚轮缩小测试色块。滚动命令直接传给当前会话，帧号在下一条 `frame` 命令执行时推进。
 
 ## 运行自制等距对局
 
