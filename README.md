@@ -60,6 +60,27 @@ python3 tests/macos_host_fixture_data.py "$fixture_dir"
   --data-dir "$fixture_dir" --skirmish-map Fixture.map
 ```
 
+### 无窗口回放自制测试会话
+
+`make macos-host-script-replay-test` 使用同一套自制测试数据，核对脚本文件和标准输入得到的帧序号与 PNG。回放只在 `CoastalHostFixture.app` 可用。宿主直接向测试会话传递输入，在指定帧写出光栅图，整个过程无需打开窗口或移动桌面指针。保留上文生成的 `fixture_dir`，为每次回放指定一个尚未创建的输出子目录。
+
+```sh
+./build/CoastalHostFixture.app/Contents/MacOS/CoastalMacHost \
+  --data-dir "$fixture_dir" --skirmish-map Fixture.map \
+  --script-file - --script-output "$fixture_dir/replay" <<'JSONL'
+{"id":1,"op":"frame","count":1,"capture":"before.png"}
+{"id":2,"op":"pointer","phase":"down","x":420,"y":280}
+{"id":3,"op":"pointer","phase":"up","x":420,"y":280}
+{"id":4,"op":"scroll","x":420,"y":280,"deltaY":-4.5,"modifiers":262144,"precise":true}
+{"id":5,"op":"frame","count":1,"capture":"after.png"}
+{"id":6,"op":"quit"}
+JSONL
+```
+
+也可以将命令写到文件，并把 `--script-file -` 换成 `--script-file commands.jsonl`。每条命令返回一行 `COASTAL_SCRIPT` 和对应的 JSON。`frame` 每次推进 1 至 600 帧，`capture` 写出最近一帧，`state` 返回视口大小与当前帧号。PNG 路径相对于新输出目录，已有文件会保留。
+
+`scroll` 需要视口坐标 `x` 和 `y`。`deltaX`、`deltaY` 默认为零，`scrollingDeltaX`、`scrollingDeltaY` 默认沿用对应的原始增量。可选字段 `modifiers`、`phase`、`momentumPhase` 默认为零，`precise`、`inverted` 默认为 `false`。上例用 Ctrl 加滚轮缩小测试色块。滚动命令直接传给当前会话，帧号在下一条 `frame` 命令执行时推进。
+
 ## 运行自制等距对局
 
 宿主按屏幕的 `CVDisplayLink` 刷新脉冲呈现，异步会话在新帧就绪时发通知。每个脉冲最多提交一帧，空帧最多补试一次；缺帧仍反映在真实 drawable 呈现间隔中。组件保留两个就绪帧、最多四份不可变快照，并通过背压等待，不跳过模拟帧。Mac 上的生产线程使用标准 `USER_INITIATED` 优先级。

@@ -32,7 +32,7 @@ bool valid_map_filename(std::string_view name) {
 }  // namespace
 
 std::optional<LaunchOptions> parse_launch_options(
-    std::span<const std::string_view> arguments, std::string& error) {
+    std::span<const std::string_view> arguments, std::string& error, FixtureReplay replay) {
     error.clear();
     LaunchOptions options;
     bool threads_set = false;
@@ -65,12 +65,15 @@ std::optional<LaunchOptions> parse_launch_options(
 
         const auto separator = argument.find('=');
         const auto name = argument.substr(0, separator);
-        const bool is_data_directory = name == "--data-dir";
-        if (!is_data_directory && name != "--skirmish-map") {
+        std::filesystem::path* path = nullptr;
+        if (name == "--data-dir") path = &options.data_directory;
+        if (replay == FixtureReplay::Enabled && name == "--script-file") path = &options.script_file;
+        if (replay == FixtureReplay::Enabled && name == "--script-output") path = &options.script_output;
+        if (!path && name != "--skirmish-map") {
             error = "Unrecognized launch argument " + std::string(argument) + ".";
             return std::nullopt;
         }
-        if (is_data_directory ? !options.data_directory.empty() : !options.skirmish_map.empty()) {
+        if (path ? !path->empty() : !options.skirmish_map.empty()) {
             error = "Specify " + std::string(name) + " once.";
             return std::nullopt;
         }
@@ -86,8 +89,8 @@ std::optional<LaunchOptions> parse_launch_options(
             return std::nullopt;
         }
 
-        if (is_data_directory) {
-            options.data_directory = std::filesystem::path(value);
+        if (path) {
+            *path = std::filesystem::path(value);
         } else {
             if (!valid_map_filename(value)) {
                 error = "--skirmish-map requires a single .map or .yrm filename.";
@@ -95,6 +98,14 @@ std::optional<LaunchOptions> parse_launch_options(
             }
             options.skirmish_map = value;
         }
+    }
+    if (options.script_file.empty() != options.script_output.empty()) {
+        error = "Specify --script-file and --script-output together.";
+        return std::nullopt;
+    }
+    if (!options.script_file.empty() && (options.data_directory.empty() || options.stress)) {
+        error = "Fixture replay requires --data-dir and is unavailable in stress mode.";
+        return std::nullopt;
     }
     if (options.stress && !options.skirmish_map.empty()) {
         error = "--stress uses its own map.";

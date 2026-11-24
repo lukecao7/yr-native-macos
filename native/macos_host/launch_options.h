@@ -19,11 +19,16 @@ struct LaunchOptions {
     unsigned threads = 1;
     bool adaptive_ai = false;
     bool cycle_views = false;
+    std::filesystem::path script_file;
+    std::filesystem::path script_output;
 };
+
+enum class FixtureReplay { Disabled, Enabled };
 
 // Arguments exclude argv[0]. An omitted directory or map is represented by an empty value.
 std::optional<LaunchOptions> parse_launch_options(
-    std::span<const std::string_view> arguments, std::string& error);
+    std::span<const std::string_view> arguments, std::string& error,
+    FixtureReplay replay = FixtureReplay::Disabled);
 std::optional<std::filesystem::path> validate_data_directory(
     const std::filesystem::path& path, std::string& error);
 
