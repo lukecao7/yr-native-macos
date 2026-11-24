@@ -512,6 +512,7 @@ std::optional<World> decode_snapshot(std::span<const std::uint8_t> bytes, std::s
         }
         if (!reader.empty()) throw std::invalid_argument("Unexpected bytes at the end of the save.");
         check_world(world);
+        world.refresh_entity_index();
         return world;
     } catch (const std::invalid_argument& invalid) {
         error = invalid.what();
