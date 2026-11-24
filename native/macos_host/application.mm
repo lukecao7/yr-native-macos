@@ -5,7 +5,9 @@
 #import <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 
+#include "data_directory.h"
 #include "frame_image.h"
+#include "initial_window.h"
 #include "input_view.h"
 #include "metal_presenter.h"
 
@@ -195,11 +197,120 @@ void install_quit_menu(NSApplication* application) {
 
 @end
 
+namespace {
+
+void stop_application(NSApplication* application) {
+    [application stop:nil];
+    // A stop request outside event dispatch needs an event to wake -run.
+    NSEvent* wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint
+                            modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0];
+    [application postEvent:wake atStart:NO];
+}
+
+std::unique_ptr<host::Session> open_session(const host::LaunchOptions& options, std::string& error) {
+    std::unique_ptr<host::Session> session;
+    try {
+        session = host::create_session(options, error);
+    } catch (const std::filesystem::filesystem_error& failure) {
+        error = failure.what();
+        return nullptr;
+    }
+    if (!session) {
+        if (error.empty()) error = "The session runtime could not start.";
+        return nullptr;
+    }
+    const auto viewport = session->viewport();
+    constexpr auto maxBytes = std::uint64_t(std::numeric_limits<CFIndex>::max());
+    if (viewport.width == 0 || viewport.height == 0 ||
+        maxBytes / (std::uint64_t(viewport.width) * 4) < viewport.height ||
+        session->frame_interval() <= host::FrameClock::duration::zero()) {
+        error = "The session reported an invalid viewport or frame interval.";
+        return nullptr;
+    }
+    return session;
+}
+
+std::unique_ptr<host::Session> open_launch_session(host::LaunchOptions& options, std::string& error) {
+    if (!options.stress || !options.data_directory.empty()) {
+        auto directory = host::resolve_data_directory(options.data_directory, error);
+        if (!directory) return nullptr;
+        options.data_directory = std::move(*directory);
+    }
+    return open_session(options, error);
+}
+
+}  // namespace
+
+@interface CoastalStartupDelegate : NSObject <NSApplicationDelegate>
+- (instancetype)initWithAttempt:(std::function<bool()>)attempt;
+- (void)scheduleAttempt:(NSTimeInterval)delay;
+- (void)startIfActive;
+@end
+
+@implementation CoastalStartupDelegate {
+    std::function<bool()> _attempt;
+    BOOL _starting;
+    BOOL _finished;
+}
+
+- (instancetype)initWithAttempt:(std::function<bool()>)attempt {
+    if ((self = [super init])) _attempt = std::move(attempt);
+    return self;
+}
+
+- (void)scheduleAttempt:(NSTimeInterval)delay {
+    if (_starting || _finished) return;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startIfActive) object:nil];
+    [self performSelector:@selector(startIfActive) withObject:nil afterDelay:delay];
+}
+
+- (void)startIfActive {
+    const auto action = host::interactive_ui_action(!_starting && !_finished);
+    if (action == host::InitialWindowAction::Wait) return;
+    if (action == host::InitialWindowAction::Retry) {
+        // AppKit can report activation before the workspace changes its frontmost app.
+        [self scheduleAttempt:0.05];
+        return;
+    }
+    _starting = YES;
+    _finished = _attempt() || _finished;
+    _starting = NO;
+    if (!_finished) [self scheduleAttempt:0];
+}
+
+- (void)applicationDidFinishLaunching:(NSNotification*)notification {
+    (void)notification;
+    [self scheduleAttempt:0];
+}
+
+- (void)applicationDidBecomeActive:(NSNotification*)notification {
+    (void)notification;
+    [self scheduleAttempt:0];
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)sender hasVisibleWindows:(BOOL)visible {
+    (void)sender;
+    (void)visible;
+    [self scheduleAttempt:0];
+    return NO;
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
+    _finished = YES;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startIfActive) object:nil];
+    if (sender.modalWindow) [sender abortModal];
+    stop_application(sender);
+    return NSTerminateCancel;
+}
+
+@end
+
 @interface CoastalAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 - (instancetype)initWithSession:(host::Session*)session
                       launchedAt:(host::FrameClock::time_point)launchedAt
                     stressWindow:(BOOL)stressWindow;
 - (void)start;
+- (void)makeInitialWindowKeyIfActive;
 - (void)detach;
 - (BOOL)startDisplayLink;
 - (void)stopDisplayLink;
@@ -268,6 +379,7 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
     BOOL _usesReadyNotifications;
     BOOL _usedDisplayLink, _timerFallback;
     BOOL _stopped;
+    BOOL _initialWindowNeedsKey;
     int _status;
 }
 
@@ -310,12 +422,31 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
 }
 
 - (void)start {
+    _initialWindowNeedsKey = YES;
+    [self makeInitialWindowKeyIfActive];
+}
+
+- (void)makeInitialWindowKeyIfActive {
+    const auto action = host::interactive_ui_action(_initialWindowNeedsKey && !_stopped);
+    if (action == host::InitialWindowAction::Wait) return;
+
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:_cmd object:nil];
+    if (action == host::InitialWindowAction::Retry) {
+        // AppKit can notify us before the workspace changes its frontmost app.
+        [self performSelector:_cmd withObject:nil afterDelay:0.05];
+        return;
+    }
+    _initialWindowNeedsKey = NO;
     [_window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
     if (![self startDisplayLink]) {
         _timerFallback = YES;
         [self scheduleFrame];
     }
+}
+
+- (void)applicationDidBecomeActive:(NSNotification*)notification {
+    (void)notification;
+    [self makeInitialWindowKeyIfActive];
 }
 
 - (BOOL)startDisplayLink {
@@ -475,15 +606,12 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
     if (_stopped) return;
     _stopped = YES;
     _status = status;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(makeInitialWindowKeyIfActive) object:nil];
     [_timer invalidate];
     _timer = nil;
     [self stopDisplayLink];
     _loop->stop();
-    [NSApp stop:nil];
-    // A stop request made outside event dispatch needs an event to wake -run.
-    NSEvent* wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint
-                            modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0];
-    [NSApp postEvent:wake atStart:NO];
+    stop_application(NSApp);
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
@@ -536,6 +664,7 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
 
 - (void)detach {
     _stopped = YES;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(makeInitialWindowKeyIfActive) object:nil];
     [_timer invalidate];
     _timer = nil;
     [self stopDisplayLink];
@@ -575,50 +704,97 @@ int main(int argc, char** argv) {
                 return 0;
             }
 
-            if (!options->stress || !options->data_directory.empty()) {
 #ifdef COASTAL_FIXTURE_REPLAY
-                auto directory = options->script_file.empty()
-                    ? host::resolve_data_directory(options->data_directory, error)
-                    : host::validate_data_directory(options->data_directory, error);
-#else
-                auto directory = host::resolve_data_directory(options->data_directory, error);
-#endif
-                if (!directory) return error.empty() ? 0 : startup_error(error);
+            if (!options->script_file.empty()) {
+                auto directory = host::validate_data_directory(options->data_directory, error);
+                if (!directory) return startup_error(error);
                 options->data_directory = std::move(*directory);
+                auto session = open_session(*options, error);
+                if (!session) return startup_error(error);
+                if (NSApp) return startup_error("AppKit was initialized before windowless fixture replay.");
+                return host::replay_script(*options, *session);
             }
-            auto session = host::create_session(*options, error);
-            if (!session) return startup_error(error.empty() ? "The session runtime could not start." : error);
-            const auto viewport = session->viewport();
-            constexpr auto maxBytes = std::uint64_t(std::numeric_limits<CFIndex>::max());
-            if (viewport.width == 0 || viewport.height == 0 ||
-                maxBytes / (std::uint64_t(viewport.width) * 4) < viewport.height ||
-                session->frame_interval() <= host::FrameClock::duration::zero()) {
-                return startup_error("The session reported an invalid viewport or frame interval.");
+#endif
+
+            std::unique_ptr<host::Session> session;
+            if (!options->data_directory.empty() || options->stress) {
+                session = open_launch_session(*options, error);
+                if (!session) return startup_error(error);
             }
 
-#ifdef COASTAL_FIXTURE_REPLAY
-            if (!options->script_file.empty()) return host::replay_script(*options, *session);
-#endif
-            NSApplication* application = NSApp;
-            if (!application) {
-                application = [NSApplication sharedApplication];
-                [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-                [application finishLaunching];
-            }
+            NSApplication* application = [NSApplication sharedApplication];
+            [application setActivationPolicy:NSApplicationActivationPolicyRegular];
             install_quit_menu(application);
-            auto* delegate = [[CoastalAppDelegate alloc] initWithSession:session.get()
+            CoastalAppDelegate* delegate = nil;
+            id<NSObject> stressActivity = nil;
+            int status = 0;
+            bool triedSavedDirectory = false;
+            bool retrySelection = false;
+            const auto attemptStartup = [&]() {
+                try {
+                    if (!session && !triedSavedDirectory) {
+                        triedSavedDirectory = true;
+                        auto configured = *options;
+                        session = open_launch_session(configured, error);
+                        retrySelection = !session && !configured.data_directory.empty();
+                        if (retrySelection) startup_error(error);
+                    }
+                    if (!session) {
+                        const auto foreground = [] {
+                            return host::interactive_ui_action(true) == host::InitialWindowAction::Show;
+                        };
+                        if (!foreground()) return false;
+                        const auto selection = host::select_data_directory(
+                            [&](auto& pickerError) { return host::choose_data_directory(retrySelection, pickerError); },
+                            [&](const auto& directory, auto& validationError) {
+                                auto configured = *options;
+                                configured.data_directory = directory;
+                                session = open_launch_session(configured, validationError);
+                                return bool(session);
+                            }, error);
+                        if (selection == host::DirectorySelection::Rejected) {
+                            startup_error(error);
+                            retrySelection = true;
+                            return false;
+                        }
+                        if (selection != host::DirectorySelection::Accepted) {
+                            if (selection == host::DirectorySelection::Unavailable) {
+                                if (!foreground()) return false;
+                                status = startup_error(error);
+                            }
+                            stop_application(application);
+                            return true;
+                        }
+                    }
+                    delegate = [[CoastalAppDelegate alloc] initWithSession:session.get()
                                                                launchedAt:launchedAt
                                                              stressWindow:options->stress];
-            if (!delegate) return startup_error("Could not create a Mac window.");
-            application.delegate = delegate;
-            id<NSObject> stressActivity = options->stress
-                ? [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
-                                                               reason:@"CoastalHost display benchmark"]
-                : nil;
-            [delegate start];
+                    if (delegate) {
+                        application.delegate = delegate;
+                        if (options->stress) {
+                            stressActivity = [NSProcessInfo.processInfo
+                                beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
+                                reason:@"CoastalHost display benchmark"];
+                        }
+                        [delegate start];
+                        return true;
+                    }
+                    status = startup_error("Could not create a Mac window.");
+                } catch (const std::exception& failure) {
+                    status = startup_error(failure.what());
+                }
+                stop_application(application);
+                return true;
+            };
+            __attribute__((objc_precise_lifetime)) CoastalStartupDelegate* startup =
+                [[CoastalStartupDelegate alloc] initWithAttempt:attemptStartup];
+            application.delegate = startup;
+            [startup scheduleAttempt:0];
             [application run];
             if (stressActivity) [NSProcessInfo.processInfo endActivity:stressActivity];
             application.delegate = nil;
+            if (!delegate) return status;
+            const auto viewport = session->viewport();
             const auto metal = [delegate finishPresentation];
             [delegate writeSchedulingMetrics];
             [delegate detach];
