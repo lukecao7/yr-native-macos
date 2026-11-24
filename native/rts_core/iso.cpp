@@ -272,7 +272,7 @@ Rect visible_cells(const Map& map, const Projection& projection, int width, int 
 }
 
 void draw_entity(Canvas& canvas, const World& world, const Projection& projection,
-                 const Entity& entity, PixelPoint point, bool selected) {
+                 const Entity& entity, PixelPoint point, bool selected, bool body_only = false) {
     const auto size = [&](double value) { return scaled_px(value, projection); };
     const auto accent = faction_color(entity.side);
     const bool building = is_building(entity.kind);
@@ -281,7 +281,7 @@ void draw_entity(Canvas& canvas, const World& world, const Projection& projectio
     const int rise = building ? (entity.kind == UnitKind::Generator ? 15 : 10) : 4;
     const int hw = size(extent);
     const int hh = size(extent * .55);
-    canvas.diamond({point.x + size(2), point.y + size(2)}, hw + 1, hh + 1, shadow);
+    if (!body_only) canvas.diamond({point.x + size(2), point.y + size(2)}, hw + 1, hh + 1, shadow);
     if (selected) canvas.rhombus_outline(point, hw + size(4), hh + size(4), highlight);
     canvas.block(point, hw, hh, size(rise), color(83, 108, 114), color(58, 77, 83), color(42, 59, 67));
 
@@ -321,6 +321,7 @@ void draw_entity(Canvas& canvas, const World& world, const Projection& projectio
                            roof.y + size(2) * (facing_x + facing_y)}, highlight);
     }
 
+    if (body_only) return;
     const std::uint16_t full_hp = world.rules.spec(entity.kind).hp;
     if (full_hp == 0) return;
     const int width = size(building ? 26 : 15);
@@ -530,6 +531,26 @@ void Camera::advance() noexcept {
 PixelPoint project_cell(const Map& map, const Camera& camera, Cell cell, int width, int height) noexcept {
     if (!valid_map(map) || !map.contains(cell) || !valid_camera(camera) || width <= 0 || height <= 0) return {};
     return Projection(camera, width, height).project(map, cell);
+}
+
+EntityId pick_entity(const World& world, const Camera& camera, PixelPoint point, int width, int height) noexcept {
+    if (!valid_map(world.map) || !valid_camera(camera) || point.x < 0 || point.y < 0 ||
+        point.x >= width || point.y >= height) return no_entity;
+    const Projection projection(camera, width, height);
+    const Rect pixel{point.x, point.y, point.x + 1, point.y + 1};
+    int front = std::numeric_limits<int>::min();
+    EntityId id = no_entity;
+    for (const auto& entity : world.entities) {
+        if (!entity.hp || entity.kind >= UnitKind::Count || !world.map.contains(entity.position)) continue;
+        const auto foot = projection.project(world.map, entity.position);
+        if (!visible(pixel, foot, scaled_px(35, projection)) ||
+            foot.y < front || (foot.y == front && entity.id <= id)) continue;
+        Color sample{};
+        Canvas canvas(sample, 1, {0, 0, 1, 1});
+        draw_entity(canvas, world, projection, entity, {foot.x - point.x, foot.y - point.y}, false, true);
+        if (sample[3]) { front = foot.y; id = entity.id; }
+    }
+    return id;
 }
 
 std::optional<Cell> pick_cell(const Map& map, const Camera& camera, PixelPoint point,

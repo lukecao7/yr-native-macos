@@ -38,6 +38,10 @@ PixelPoint project_cell(const Map& map, const Camera& camera, Cell cell, int wid
 std::optional<Cell> pick_cell(const Map& map, const Camera& camera, PixelPoint point,
                               int width, int height) noexcept;
 
+// Returns the topmost visible body drawn by the isometric renderer at this pixel.
+EntityId pick_entity(const World& world, const Camera& camera, PixelPoint point,
+                     int width, int height) noexcept;
+
 struct ViewOverlay {
     Side side = Side::Blue;
     std::optional<SelectionBox> drag;
