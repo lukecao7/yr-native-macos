@@ -9,6 +9,10 @@
 
 namespace coastal::macos_host {
 
+// RuntimeInterval observes the session's nominal cadence. WallClockBackpressure
+// produces as FIFO space opens and still feeds the simulation measured time.
+enum class ProducerPacing { RuntimeInterval, WallClockBackpressure };
+
 struct LaunchOptions {
     std::filesystem::path data_directory;
     std::string skirmish_map;
@@ -20,6 +24,7 @@ struct LaunchOptions {
     bool cycle_views = false;
     std::filesystem::path script_file;
     std::filesystem::path script_output;
+    ProducerPacing producer_pacing = ProducerPacing::RuntimeInterval;
 };
 
 enum class FixtureReplay { Disabled, Enabled };

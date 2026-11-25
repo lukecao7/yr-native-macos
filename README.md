@@ -89,6 +89,8 @@ JSONL
 
 普通 Metal 窗口关闭后，`MAC_HOST_METRICS.physicalDisplayClock` 报告实际呈现的首尾时刻、间隔数和平均 FPS。重复的屏幕时间只计一次。如果回调乱序且早期记录已从采样缓冲区移出，平均 FPS 显示为 `null`。
 
+C++ 宿主可将 `LaunchOptions::producer_pacing` 设为 `ProducerPacing::WallClockBackpressure`。队列最多保存两帧。生产线程在队列有空位时推进，每次将实际经过的时间传给模拟。默认模式使用会话指定的帧间隔。
+
 线程安全的 C++ 会话可显式调用 `make_presented_session()` 使用独立生产线程。初始化时仍在宿主线程读取视口、帧间隔和不可变地形；帧推进及输入随后由单一工作线程执行，不能同步等待 AppKit 主线程。就绪回调必须短小、不阻塞，宿主通过弱状态撤销关闭后的通知。复制到宿主外部缓冲的 2D 帧不声明自己拥有该缓冲，独立像素与 3D 场景则保留快照所有权。`make macos-host-test` 包含通知、关闭、异常、缓冲生命周期和刷新节拍回归。
 
 `make rts-test` 会验证地图、绘制、采集、交火、存档和回放，并用脚本完整跑完一局 1v1。用同一份地图和规则可打开 Mac 窗口。
