@@ -69,7 +69,7 @@ void tick_public(World& world, Navigator& nav) {
     const auto before_step = world.step;
     const auto before_rng = world.rng_state;
     const auto before_entities = world.entities.size();
-    std::array<std::array<std::uint64_t, 3>, 2> economy{};
+    std::array<std::array<std::uint64_t, 3>, max_houses> economy{};
     for (std::size_t side = 0; side < world.sides.size(); ++side) {
         const auto& state = world.sides[side];
         require(state.queue.empty() && !state.ai, "Movement fixture acquired production or AI");
