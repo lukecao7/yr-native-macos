@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #import "metal_presenter.h"
 #import "metal_scene.h"
+#include "presented_trace.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <Metal/Metal.h>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -20,7 +22,7 @@ constexpr MTLPixelFormat source_format = MTLPixelFormatRGBA8Unorm;
 constexpr MTLPixelFormat drawable_format = MTLPixelFormatBGRA8Unorm;
 constexpr std::size_t buffer_count = 3;
 // Covers a complete five-minute 60 Hz endurance check with a fixed memory bound.
-constexpr std::size_t presentation_samples = 32'769;
+constexpr std::size_t presentation_samples = host::presentation_history_capacity;
 constexpr std::uint32_t max_texture_dimension = 16384;
 
 constexpr char shader_source[] = R"metal(
@@ -113,7 +115,7 @@ public:
         }
     }
 
-    host::MetalMetrics metrics() const {
+    host::MetalMetrics metrics(const std::string& trace_path) const {
         host::MetalMetrics result;
         host::DisplayClock clock;
         std::vector<PresentedFrame> times;
@@ -134,11 +136,18 @@ public:
         }
         result.drawable_acquire=summarize_intervals(work[0]);
         result.encode_submit=summarize_intervals(work[1]);
+        // Export keeps callback order from this snapshot. Only an explicitly
+        // requested exit trace needs the extra bounded copy before sorting.
+        const bool export_trace = !trace_path.empty();
+        const auto trace_ring = export_trace ? times : std::vector<PresentedFrame>{};
         // Callback delivery order can differ from the actual display order.
         std::sort(times.begin(), times.end(), [](const PresentedFrame& a, const PresentedFrame& b) {
             return a.time < b.time;
         });
         result.display_clock = clock.summarize_sorted(times);
+        if (export_trace && !host::write_presented_trace(trace_path.c_str(), trace_ring, result.display_clock)) {
+            NSLog(@"Could not create presentation trace. Choose a new absolute path in an existing directory.");
+        }
         if (times.size() < 2) return result;
         std::vector<std::chrono::nanoseconds> intervals;
         std::vector<std::chrono::nanoseconds> scene_intervals;
@@ -185,6 +194,7 @@ private:
     std::size_t _nextBuffer;
     std::size_t _writingBuffer;
     BOOL _finished;
+    std::string _presentedTracePath;
 }
 
 - (instancetype)initWithViewport:(host::Viewport)viewport {
@@ -238,6 +248,9 @@ private:
         _layer.colorspace = space;
         CGColorSpaceRelease(space);
         _history = std::make_shared<PresentationHistory>();
+        if (const char* path = std::getenv("COASTAL_PRESENTED_TRACE"); path && path[0] == '/') {
+            _presentedTracePath = path;
+        }
         return self;
     }
     return nil;
@@ -316,7 +329,7 @@ private:
 }
 
 - (host::MetalMetrics)metrics {
-    return _history->metrics();
+    return _history->metrics(host::take_exit_trace_path(_finished, _presentedTracePath));
 }
 
 - (void)finish {

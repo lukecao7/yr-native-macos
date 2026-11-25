@@ -52,6 +52,8 @@ make
 
 通过 Finder 双击或点击 Dock 图标激活宿主后，macOS 确认它位于前台才会显示目录选择器或主窗口。以后台方式打开时，宿主等到主动激活后再检查已保存的目录。
 
+设置环境变量 `COASTAL_PRESENTED_TRACE` 为新文件的绝对路径后，Metal 窗口退出时会保存 JSON。它按系统回调到达顺序保留至多 32,769 个正且有限的 drawable 呈现时间。文件也记录有效与无效回调总数。超出上限时，`truncated` 为真，`firstRetainedCallbackIndex` 给出省略的有效回调数量。已有文件会保留。
+
 支持共享帧缓冲的运行时可直接向 Metal 共享内存绘制。宿主在 Metal 无法初始化时回退到 Core Graphics。退出时终端会记录显示帧数、提交帧数、帧间隔分位数和峰值内存。Metal 显示帧间隔来自系统的 drawable 呈现回调。 共享像素槽先完成 CPU 绘图，再在编码屏幕绘制前获取显示缓冲。显示缓冲暂时不可用时，保留同一待呈现帧并重试，不额外推进对局；`drawableAcquire` 和 `encodeAndSubmit` 分别记录缓冲等待与编码提交耗时，便于分清游戏计算与显示等待。 `fullOriginalFrames` 也只累计系统实际显示、且由运行时标为完整原版画面的帧；菜单和暂停画面不计入，换局不清零。`submittedFullOriginalFrames` 单独记录提交数量。`activeObjects` 是当前画面的对象数，`lastOriginalActiveObjects` 保留最后一帧原版画面的对象数，返回大厅后可据此区分两种口径。
 
 ```sh
