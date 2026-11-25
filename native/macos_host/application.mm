@@ -376,6 +376,7 @@ struct DisplayPulseState {
     const host::FrameClock::duration fallback_period;
     std::atomic<bool> active{true};
     std::atomic<unsigned> pending_signals{0};
+    std::atomic<bool> waiting_for_frame{false};
     std::atomic<std::uint64_t> output_host_time{0};
     std::atomic<std::uint64_t> callbacks{0}, eligible_pulses{0}, coalesced_pulses{0};
     std::atomic<std::uint64_t> ready_notifications{0}, coalesced_ready{0};
@@ -397,6 +398,13 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
         else if (signals&frame_ready_signal) [target frameReadyForDisplay:output];
     });
     return true;
+}
+
+void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
+    state->ready_notifications.fetch_add(1,std::memory_order_relaxed);
+    if (state->waiting_for_frame.exchange(false,std::memory_order_acq_rel) &&
+        !post_main_signal(state,frame_ready_signal))
+        state->coalesced_ready.fetch_add(1,std::memory_order_relaxed);
 }
 
 }  // namespace
@@ -530,10 +538,8 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
     _usesReadyNotifications=_session->supports_frame_ready_notifications();
     if (_usesReadyNotifications) {
         _session->set_frame_ready_handler([weak=std::weak_ptr<DisplayPulseState>(state)] {
-            if (const auto signal=weak.lock();signal&&signal->active.load(std::memory_order_acquire)) {
-                signal->ready_notifications.fetch_add(1,std::memory_order_relaxed);
-                if(!post_main_signal(signal,frame_ready_signal))signal->coalesced_ready.fetch_add(1,std::memory_order_relaxed);
-            }
+            if (const auto state=weak.lock();state&&state->active.load(std::memory_order_acquire))
+                notify_waiting_display(state);
         });
     }
     if (result != kCVReturnSuccess || CVDisplayLinkStart(_displayLink) != kCVReturnSuccess) {
@@ -606,7 +612,14 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
             const auto step = [self]() -> std::optional<host::FrameCommit> {
                 if (!_window.visible || _window.miniaturized) return std::nullopt;
                 return _delivery.step(*_loop,
-                    [self] { return [_surface advanceFrame]; },
+                    [self] {
+                        // Arm before polling. A publish just before the poll is
+                        // observed by the poll or by its one-shot wakeup.
+                        if (_usesReadyNotifications) _displayState->waiting_for_frame.store(true,std::memory_order_release);
+                        auto frame=[_surface advanceFrame];
+                        if (frame && _usesReadyNotifications) _displayState->waiting_for_frame.store(false,std::memory_order_release);
+                        return frame;
+                    },
                     [self](const host::Frame& frame) { return [_surface presentFrame:frame]; });
             };
             const auto result = outputHostTime ? _loop->display_tick(outputHostTime, step) : _loop->tick(step);

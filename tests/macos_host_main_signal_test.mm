@@ -16,6 +16,17 @@ int main() {
             auto external = std::make_shared<DisplayPulseState>(
                 nullptr, std::chrono::nanoseconds(16'666'667));
             weak = external;
+            notify_waiting_display(external);
+            if (external->pending_signals.load()!=0) return 1;
+            external->waiting_for_frame.store(true);
+            notify_waiting_display(external);
+            if (external->pending_signals.load()!=frame_ready_signal || external->waiting_for_frame.load()) return 1;
+            notify_waiting_display(external);
+            if (external->coalesced_ready.load()!=0 || external->ready_notifications.load()!=3) return 1;
+            // Keep the queued ready block alive and exercise a fresh state for
+            // the display-pulse ownership check below.
+            external=std::make_shared<DisplayPulseState>(nullptr,std::chrono::nanoseconds(16'666'667));
+            weak=external;
             if (!post_main_signal(external, display_signal)) {
                 std::fputs("Main signal was not queued.\n", stderr);
                 return 1;
