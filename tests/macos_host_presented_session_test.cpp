@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include "macos_host/display_camera_clock.h"
 #include "macos_host/presented_session.h"
 #include "rts_3d/scene.h"
 #include <array>
@@ -11,6 +12,7 @@
 #include <streambuf>
 #include <string>
 #include <thread>
+#include <vector>
 using namespace std::chrono_literals;
 namespace host=coastal::macos_host;
 namespace {
@@ -24,6 +26,9 @@ struct Control{
     std::size_t clock_samples=0,clock_starts=0;
     std::chrono::nanoseconds elapsed{}, last_elapsed{};
     bool wait_for_key=false;
+    std::array<host::FrameClock::time_point,2> first_camera_samples{};
+    std::size_t camera_sample_count=0,camera_resets=0;
+    std::thread::id camera_thread;
 };
 struct ReleaseOnExit{
     std::shared_ptr<Control> state;
@@ -43,6 +48,17 @@ public:
         if (value == 0ns) ++state_->clock_starts;
         state_->elapsed += value;
         state_->last_elapsed = value;
+    }
+    void set_camera_sample_time(host::FrameClock::time_point value) noexcept override {
+        std::lock_guard lock(state_->mutex);
+        state_->camera_thread=std::this_thread::get_id();
+        if(state_->camera_sample_count<state_->first_camera_samples.size())
+            state_->first_camera_samples[state_->camera_sample_count]=value;
+        ++state_->camera_sample_count;
+    }
+    void reset_frame_elapsed() noexcept override {
+        std::lock_guard lock(state_->mutex);
+        ++state_->camera_resets;
     }
     std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_for_metal()override{
         std::lock_guard lock(state_->mutex);++state_->terrain_calls;state_->terrain_thread=std::this_thread::get_id();return terrain_;
@@ -234,6 +250,82 @@ class BrokenOutput final:public std::streambuf{
     int_type overflow(int_type)override{throw std::runtime_error("synthetic diagnostic failure");}
     std::streamsize xsputn(const char*,std::streamsize)override{throw std::runtime_error("synthetic diagnostic failure");}
 };
+void display_camera_samples_follow_fifo_slots() {
+    host::DisplayCameraClock camera;
+    const host::FrameClock::time_point began{1s};
+    constexpr auto period=16'666'667ns;
+    require(!camera.sample(began,period,2),"camera time exists before a display pulse");
+
+    auto pulse=began+2*period;
+    camera.observe(pulse);
+    const auto first=camera.sample(began,period,2);
+    const auto second=camera.sample(began+2ms,period,2);
+    require(first&&second&&*first==began-period&&*second==began,
+            "two ready pictures did not reserve consecutive sample times");
+
+    // The display has a regular cadence even when worker starts jitter.
+    constexpr std::array starts{19ms,39ms,51ms,75ms,90ms,105ms,121ms};
+    auto previous=*second;
+    for(const auto start:starts){
+        pulse+=period;
+        camera.observe(pulse);
+        const auto sample=camera.sample(began+start,period,2);
+        require(sample&&*sample-previous==period,"producer jitter leaked into a ready camera frame");
+        require(*sample<=began+start,"camera consumed a sample beyond the input cutoff");
+        previous=*sample;
+    }
+
+    // One already planned picture can cover the first pulse. Two further
+    // missed slots remain elapsed time in the next real FIFO picture.
+    pulse+=4*period;
+    camera.observe(pulse);
+    camera.observe(pulse-period); // a stale notification must never move the clock back
+    const auto recovered=camera.sample(pulse-20ms,period,2);
+    require(recovered&&*recovered-previous==3*period,"two missed slots disappeared from the sampling clock");
+
+    camera.observe(pulse+period);
+    const auto cutoff=*recovered+1ms;
+    const auto bounded=camera.sample(cutoff,period,2);
+    require(bounded&&*bounded==cutoff,"camera read physical input from the future");
+
+    // Resume uses a new time origin. Neither time spent paused nor a stale
+    // pre-pause sampling horizon runs through the first resumed picture.
+    camera.reset();
+    camera.observe(pulse+500*period);
+    const auto resumed=camera.sample(began+9s,period,2);
+    require(resumed&&*resumed==began+9s-period,"camera reset retained the stale presentation phase");
+    camera.reset();
+    const auto no_reserve=camera.sample(began+10s,period,0);
+    require(no_reserve&&*no_reserve==began+10s,"zero ready capacity underflowed the sampling lead");
+}
+
+void camera_clock_belongs_to_the_default_presented_session() {
+    const auto state=std::make_shared<Control>();
+    state->released=true;
+    const auto period=3ms;
+    auto session=host::make_presented_session(std::make_unique<Fake>(state, period));
+    const auto began=host::FrameClock::now();
+    const auto pulse=began+period;
+    session->observe_display_pulse(pulse);
+    require(wait_frame(*session).commit.index==0 && wait_frame(*session).commit.index==1,
+            "camera clock interrupted the public ready FIFO");
+    {
+        std::lock_guard lock(state->mutex);
+        require(state->camera_sample_count>=2 && state->camera_thread==state->frame_thread &&
+                state->camera_thread!=std::this_thread::get_id() &&
+                state->first_camera_samples[1]-state->first_camera_samples[0]==period &&
+                state->first_camera_samples[0]>=began-period,
+                "the public default producer did not pass successive physical camera samples");
+    }
+    session->reset_frame_elapsed();
+    const auto deadline=host::FrameClock::now()+2s;
+    while(host::FrameClock::now()<deadline) {
+        (void)wait_frame(*session);
+        std::lock_guard lock(state->mutex);
+        if(state->camera_resets==1&&state->clock_starts==2)return;
+    }
+    throw std::runtime_error("the public frame owner did not reset its camera clock after resume");
+}
 void diagnostic_failure(){
     auto session=host::make_presented_session(std::make_unique<Fake>(std::make_shared<Control>()));
     BrokenOutput broken;
@@ -246,7 +338,8 @@ void diagnostic_failure(){
 int main(){try{
     immutable_frames_and_inputs();borrowed_target_frames();producer_error();
     elapsed_time_belongs_to_the_producer();wall_clock_backpressure();empty_wall_clock_session_waits_for_input();
+    display_camera_samples_follow_fifo_slots();camera_clock_belongs_to_the_default_presented_session();
     revoked_handler_does_not_receive_a_later_publication();queued_ready_notifications_do_not_retain_a_closed_host();diagnostic_failure();
-    std::cout<<"MAC_HOST_PRESENTED_SESSION_PASS nonblocking=true immutablePixels=true immutableScene=true inputsOwned=true sequential=true cleanJoin=true borrowedTarget=true cachedTerrain=true forwardedError=true diagnosticNoThrow=true wallFifo=true emptyWait=true inputWake=true readyNotification=true handlerRevoked=true lateHostCallbackSafe=true\n";
+    std::cout<<"MAC_HOST_PRESENTED_SESSION_PASS nonblocking=true immutablePixels=true immutableScene=true inputsOwned=true sequential=true cleanJoin=true borrowedTarget=true cachedTerrain=true forwardedError=true diagnosticNoThrow=true wallFifo=true emptyWait=true inputWake=true readyNotification=true handlerRevoked=true lateHostCallbackSafe=true cameraFifoClock=true\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
