@@ -111,6 +111,7 @@ void install_quit_menu(NSApplication* application) {
 
 @interface CoastalFrameView : CoastalInputView
 - (std::optional<host::Frame>)advanceFrame;
+- (void)resetFrameElapsed;
 - (host::FramePresentation)presentFrame:(const host::Frame&)frame;
 - (std::optional<host::MetalMetrics>)finishPresentation;
 @end
@@ -121,6 +122,7 @@ void install_quit_menu(NSApplication* application) {
     CoastalMetalPresenter* _metal;
     CGColorSpaceRef _colorSpace;
     CGImageRef _image;
+    host::FrameElapsedTime _elapsed;
     BOOL _drewImage;
 }
 
@@ -157,10 +159,19 @@ void install_quit_menu(NSApplication* application) {
 }
 
 - (std::optional<host::Frame>)advanceFrame {
-    if (!_metal) return _session->advance_frame();
+    if (!_metal) {
+        _session->set_frame_elapsed(_elapsed.sample());
+        return _session->advance_frame();
+    }
     const auto pixels = [_metal writablePixels];
     if (pixels.empty()) return std::nullopt;
+    _session->set_frame_elapsed(_elapsed.sample());
     return _session->advance_frame_into(pixels);
+}
+
+- (void)resetFrameElapsed {
+    _elapsed.reset();
+    _session->reset_frame_elapsed();
 }
 
 - (host::FramePresentation)presentFrame:(const host::Frame&)frame {
@@ -624,6 +635,9 @@ bool post_main_signal(std::shared_ptr<DisplayPulseState> state,unsigned signal) 
 }
 
 - (void)windowDidResignKey:(NSNotification*)notification { _session->input_focus_lost(); }
+
+- (void)windowDidDeminiaturize:(NSNotification*)notification { [_surface resetFrameElapsed]; }
+- (void)applicationDidUnhide:(NSNotification*)notification { [_surface resetFrameElapsed]; }
 
 - (void)windowWillClose:(NSNotification*)notification { [self stopWithStatus:0]; }
 

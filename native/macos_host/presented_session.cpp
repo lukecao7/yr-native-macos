@@ -104,6 +104,7 @@ public:
         }catch(...){fail(std::current_exception());}
     }
     void input_focus_lost()noexcept override{enqueue([](host::Session& s){s.input_focus_lost();});}
+    void reset_frame_elapsed() noexcept override { reset_clock_.store(true,std::memory_order_release); }
 private:
     void notify_ready(const std::shared_ptr<ReadyHandler>& handler)noexcept{
         if(!handler||!handler->active.load(std::memory_order_acquire))return;
@@ -141,6 +142,7 @@ private:
         try{
             configure_producer_qos();
             auto due=host::FrameClock::now();
+            FrameElapsedTime clock;
             for(;;){
                 std::deque<std::function<void(host::Session&)>> inputs;
                 {
@@ -160,6 +162,10 @@ private:
                     if(!packet&&pool_.size()<4){packet=std::make_shared<Packet>();packet->pixels.resize(std::size_t(viewport_.width)*viewport_.height*4);pool_.push_back(packet);}
                     if(!packet){std::unique_lock lock(mutex_);condition_.wait_for(lock,std::chrono::milliseconds(1));if(stopping_)return;}
                 }
+                // The producer owns simulation and can run ahead of the UI.
+                // Sampling here includes waits for both cadence and storage.
+                if (reset_clock_.exchange(false,std::memory_order_acq_rel)) clock.reset();
+                session_->set_frame_elapsed(clock.sample());
                 auto frame=session_->supports_shared_frames()?session_->advance_frame_into(packet->pixels):session_->advance_frame();
                 if(frame){
                     packet->commit=frame->commit;
@@ -186,6 +192,7 @@ private:
     host::Viewport viewport_;
     host::FrameClock::duration interval_;
     const std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_;
+    std::atomic<bool> reset_clock_{false};
     std::mutex mutex_;
     std::condition_variable condition_;
     std::deque<std::function<void(host::Session&)>> inputs_;

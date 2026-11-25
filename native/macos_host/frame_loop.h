@@ -12,6 +12,20 @@ namespace coastal::macos_host {
 
 using FrameClock = std::chrono::steady_clock;
 
+// Sample at the point of frame production so unavailable draws and skipped
+// display pulses are included in the next interval.
+class FrameElapsedTime {
+public:
+    std::chrono::nanoseconds sample(FrameClock::time_point now = FrameClock::now()) noexcept {
+        const auto elapsed = now - previous_.value_or(now);
+        previous_ = now;
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed);
+    }
+    void reset() noexcept { previous_.reset(); }
+private:
+    std::optional<FrameClock::time_point> previous_;
+};
+
 struct FrameCommit {
     std::uint64_t index;
     std::uint64_t active_objects;

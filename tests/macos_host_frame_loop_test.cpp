@@ -365,6 +365,25 @@ void check_platform_process_rss() {
 #endif
 }
 
+void measure_elapsed_time_across_late_presentations() {
+    Fixture fixture;
+    FrameElapsedTime elapsed;
+    std::array<std::chrono::nanoseconds,3> intervals{};
+    for (const auto started : {0ms, 10ms, 90ms}) {
+        fixture.time = fixture.launched + started;
+        expect(fixture.loop.tick([&] {
+            intervals.at(fixture.draws) = elapsed.sample(fixture.time);
+            return fixture.draw_if_accepted({fixture.draws, 1});
+        }) == FrameTick::Presented, "Each scheduled or late draw commits once");
+    }
+    expect(intervals[0] == 0ns && intervals[1] == 10ms && intervals[2] == 80ms,
+           "Simulation elapsed time includes skipped display slots");
+    elapsed.reset();
+    expect(elapsed.sample(fixture.time + 10s) == 0ns &&
+           elapsed.sample(fixture.time + 10s + 5ms) == 5ms,
+           "Resumed production excludes the time it was suspended");
+}
+
 }  // namespace
 
 int main() {
@@ -380,6 +399,7 @@ int main() {
         retain_a_bounded_timing_window();
         check_stop_during_dispatch();
         check_platform_process_rss();
+        measure_elapsed_time_across_late_presentations();
         std::cout << "macOS host frame-loop tests passed (300 diagnostic frames)\n";
         return 0;
     } catch (const std::exception& error) {
