@@ -85,6 +85,10 @@ public:
     // advancing. The first frame after startup or resume receives zero.
     virtual void set_frame_elapsed(std::chrono::nanoseconds) noexcept {}
     virtual void reset_frame_elapsed() noexcept {}
+    // The host reports real display pulses on its main thread. The frame
+    // producer may supply the ordered camera sample on the simulation owner.
+    virtual void observe_display_pulse(FrameClock::time_point) noexcept {}
+    virtual void set_camera_sample_time(FrameClock::time_point) noexcept {}
     // Called by the AppKit main thread. Return promptly and report no frame
     // while waiting for work. Each ready frame gets a sequential index.
     virtual std::optional<Frame> advance_frame() = 0;

@@ -420,6 +420,8 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
     std::shared_ptr<DisplayPulseState> _displayState;
     CGDirectDisplayID _displayID;
     double _hostSecondsPerTick;
+    std::uint64_t _hostClockOriginTicks;
+    host::FrameClock::time_point _hostClockOrigin;
     std::uint64_t _retryOutputTime;
     std::uint64_t _currentDisplayOutput;
     std::uint64_t _mainPulses, _readinessRetries, _emptyAttempts;
@@ -439,6 +441,8 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
     mach_timebase_info_data_t timebase{};
     if (mach_timebase_info(&timebase) != KERN_SUCCESS || !timebase.denom) return nil;
     _hostSecondsPerTick = double(timebase.numer) / double(timebase.denom) / 1'000'000'000.0;
+    _hostClockOriginTicks = mach_absolute_time();
+    _hostClockOrigin = host::FrameClock::now();
     _loop = std::make_unique<host::FrameLoop>(session->frame_interval(), launchedAt);
     const auto viewport = session->viewport();
     const CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
@@ -569,6 +573,12 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
     ++_mainPulses;
     if (outputHostTime<=_currentDisplayOutput) return;
     _currentDisplayOutput=outputHostTime;
+    if (_window.visible && !_window.miniaturized) {
+        const auto offset = outputHostTime >= _hostClockOriginTicks
+            ? double(outputHostTime - _hostClockOriginTicks) : -double(_hostClockOriginTicks - outputHostTime);
+        _session->observe_display_pulse(_hostClockOrigin + std::chrono::duration_cast<host::FrameClock::duration>(
+            std::chrono::duration<double>(offset * _hostSecondsPerTick)));
+    }
     [_timer invalidate];
     _timer = nil;
     [self renderFrameForDisplay:outputHostTime];

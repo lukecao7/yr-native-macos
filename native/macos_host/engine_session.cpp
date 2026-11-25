@@ -94,6 +94,11 @@ public:
     Viewport viewport() const noexcept override { return {width, height}; }
     FrameClock::duration frame_interval() const noexcept override { return std::chrono::nanoseconds(16'666'667); }
     bool supports_shared_frames() const noexcept override { return true; }
+    void set_camera_sample_time(FrameClock::time_point sample) noexcept override { camera_sample_ = sample; }
+    void reset_frame_elapsed() noexcept override {
+        camera_sample_.reset();
+        previous_camera_sample_.reset();
+    }
 
     std::shared_ptr<const view3d::TerrainMesh> terrain_for_metal() override {
         scene_.terrain = view3d::make_terrain_mesh(world_.map);
@@ -186,6 +191,7 @@ public:
     }
 
     void input_focus_lost() noexcept override {
+        reset_frame_elapsed();
         hover_.reset();
         drag_.reset();
         orbit_drag_.reset();
@@ -423,15 +429,24 @@ private:
 
     void advance_camera() {
         if (view_3d_) {
+            reset_frame_elapsed();
             orbit_.advance();
             return;
+        }
+        const auto sample = std::exchange(camera_sample_, std::nullopt);
+        const auto previous = std::exchange(previous_camera_sample_, sample);
+        double elapsed_frames = 1;
+        if (sample) {
+            const auto elapsed = *sample - previous.value_or(*sample);
+            elapsed_frames = std::max(0.0, std::chrono::duration<double>(elapsed) /
+                                             std::chrono::duration<double>(frame_interval()));
         }
         if (hover_ && !drag_ && !right_drag_) {
             constexpr int border = 14;
             const auto scroll = [](int pixel, int extent) {
                 return pixel < border ? 8 : pixel >= extent - border ? -8 : 0;
             };
-            camera_.pan(scroll(hover_->x, width), scroll(hover_->y, height));
+            camera_.pan(scroll(hover_->x, width) * elapsed_frames, scroll(hover_->y, height) * elapsed_frames);
         }
         camera_.advance();
     }
@@ -535,6 +550,7 @@ private:
     World world_;
     Navigator navigator_;
     Camera camera_;
+    std::optional<FrameClock::time_point> camera_sample_, previous_camera_sample_;
     view3d::OrbitCamera orbit_;
     view3d::SceneFrame scene_;
     std::filesystem::path save_path_;

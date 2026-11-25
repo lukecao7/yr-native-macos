@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "presented_session.h"
+#include "display_camera_clock.h"
 #include "rts_3d/scene.h"
 #include <algorithm>
 #include <atomic>
@@ -22,6 +23,8 @@
 namespace coastal::macos_host {
 namespace host=coastal::macos_host;
 namespace {
+constexpr std::size_t ready_limit = 2;
+
 void configure_producer_qos()noexcept{
 #if defined(__APPLE__)
     int before_relative=0,after_relative=0;
@@ -108,6 +111,10 @@ public:
     }
     void input_focus_lost()noexcept override{enqueue([](host::Session& s){s.input_focus_lost();});}
     void reset_frame_elapsed() noexcept override { reset_clock_.store(true,std::memory_order_release); }
+    void observe_display_pulse(host::FrameClock::time_point pulse) noexcept override {
+        std::lock_guard lock(mutex_);
+        camera_clock_.observe(pulse);
+    }
 private:
     void notify_ready(const std::shared_ptr<ReadyHandler>& handler)noexcept{
         if(!handler||!handler->active.load(std::memory_order_acquire))return;
@@ -149,18 +156,27 @@ private:
             FrameElapsedTime clock;
             for(;;){
                 std::deque<std::function<void(host::Session&)>> inputs;
+                std::optional<host::FrameClock::time_point> camera_sample;
+                bool reset_elapsed = false;
                 {
                     std::unique_lock lock(mutex_);
-                    if(ready_.size()>=2)++full_waits_;
-                    condition_.wait(lock,[&]{return stopping_||ready_.size()<2;});
+                    if(ready_.size()>=ready_limit)++full_waits_;
+                    condition_.wait(lock,[&]{return stopping_||ready_.size()<ready_limit;});
                     if(stopping_)return;
                     if (pacing_ == ProducerPacing::RuntimeInterval) {
                         condition_.wait_until(lock, due, [&]{return stopping_;});
                         if (stopping_) return;
                     }
                     inputs.swap(inputs_);
+                    reset_elapsed = reset_clock_.exchange(false,std::memory_order_acq_rel);
+                    if (reset_elapsed) camera_clock_.reset();
+                    camera_sample = camera_clock_.sample(host::FrameClock::now(), interval_, ready_limit);
                 }
                 const auto began=host::FrameClock::now();
+                if (reset_elapsed) {
+                    clock.reset();
+                    session_->reset_frame_elapsed();
+                }
                 for(auto& event:inputs)event(*session_);
                 std::shared_ptr<Packet> packet;
                 while(!packet){
@@ -170,8 +186,8 @@ private:
                 }
                 // The producer owns simulation and can run ahead of the UI.
                 // Sampling here includes waits for both cadence and storage.
-                if (reset_clock_.exchange(false,std::memory_order_acq_rel)) clock.reset();
                 session_->set_frame_elapsed(clock.sample());
+                if (camera_sample) session_->set_camera_sample_time(*camera_sample);
                 auto frame=session_->supports_shared_frames()?session_->advance_frame_into(packet->pixels):session_->advance_frame();
                 if(frame){
                     packet->software_cursor=session_->has_software_cursor();
@@ -208,6 +224,7 @@ private:
     const std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_;
     std::atomic<bool> software_cursor_;
     std::atomic<bool> reset_clock_{false};
+    DisplayCameraClock camera_clock_;
     std::mutex mutex_;
     std::condition_variable condition_;
     std::deque<std::function<void(host::Session&)>> inputs_;
