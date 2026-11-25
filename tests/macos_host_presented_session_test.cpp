@@ -31,6 +31,7 @@ struct ReleaseOnExit{
 };
 class Fake final:public host::Session{
 public:
+    bool has_software_cursor()const noexcept override {return frames_%2==1;}
     explicit Fake(std::shared_ptr<Control> state, host::FrameClock::duration interval=3ms)
         : state_(std::move(state)), interval_(interval) {}
     host::Viewport viewport()const noexcept override{return {2,2};}
@@ -80,7 +81,9 @@ void immutable_frames_and_inputs(){
     require(host::FrameClock::now()-before<20ms,"GUI waited for simulation work");
     {std::lock_guard lock(state->mutex);require(state->scene&&state->key=="borrowed-key","setup/input order or borrowed key lifetime changed");require(state->terrain_calls==1&&state->terrain_thread==std::this_thread::get_id()&&state->frame_thread!=std::this_thread::get_id(),"terrain query reached the worker-owned runtime after setup");state->released=true;state->changed.notify_all();}
     const auto first=wait_frame(*session);require(first.commit.index==0&&first.rgba_owner&&first.rgba.front()==1,"first immutable frame invalid");
+    require(session->has_software_cursor(),"first delivered frame lost its software cursor");
     const auto second=wait_frame(*session);require(second.commit.index==1&&second.scene&&second.scene->step==1&&second.rgba_owner,"owned 3D scene missing");
+    require(!session->has_software_cursor(),"second delivered frame retained the previous cursor");
     const auto third=wait_frame(*session);require(third.commit.index==2&&third.rgba.front()==3,"producer dropped or repeated a commit");
     require(first.rgba.front()==1&&second.scene->step==1,"new production mutated a pending presentation");
     session.reset();require(first.rgba.front()==1&&second.scene->step==1,"shutdown invalidated retained frame storage");

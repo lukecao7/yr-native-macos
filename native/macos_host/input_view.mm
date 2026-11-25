@@ -30,6 +30,7 @@ std::uint32_t button_number(NSEvent* event) {
 @implementation CoastalInputView {
     host::Session* _session;
     NSTrackingArea* _pointerTracking;
+    BOOL _softwareCursor;
 }
 
 - (instancetype)initWithFrame:(NSRect)rect session:(host::Session*)session {
@@ -41,6 +42,30 @@ std::uint32_t button_number(NSEvent* event) {
 }
 
 - (BOOL)acceptsFirstResponder { return YES; }
+
+- (void)syncFrameCursor {
+    const BOOL next = _session && _session->has_software_cursor();
+    if (next == _softwareCursor) return;
+    _softwareCursor = next;
+    [self.window invalidateCursorRectsForView:self];
+}
+
+- (void)resetCursorRects {
+    [super resetCursorRects];
+    _softwareCursor = _session && _session->has_software_cursor();
+    if (!_softwareCursor) return;
+    static NSCursor* transparent;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSImage* blank=[NSImage imageWithSize:NSMakeSize(16,16) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+            [[NSColor clearColor] setFill];
+            NSRectFillUsingOperation(rect,NSCompositingOperationCopy);
+            return YES;
+        }];
+        transparent=[[NSCursor alloc] initWithImage:blank hotSpot:NSZeroPoint];
+    });
+    [self addCursorRect:self.visibleRect cursor:transparent];
+}
 
 - (void)updateTrackingAreas {
     [super updateTrackingAreas];

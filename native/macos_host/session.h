@@ -91,6 +91,7 @@ public:
     // Opt-in runtimes render directly into a tightly packed shared RGBA8 frame.
     // The target is borrowed for this call. Return its full span in Frame::rgba
     // and do not retain it. If the target is unavailable, the host skips the tick.
+    virtual bool has_software_cursor() const noexcept { return false; }
     virtual bool supports_shared_frames() const noexcept { return false; }
     virtual std::optional<Frame> advance_frame_into(std::span<std::uint8_t>) {
         return advance_frame();
