@@ -22,7 +22,8 @@ struct Control{
     std::thread::id terrain_thread,frame_thread;
     std::thread::id clock_thread;
     std::size_t clock_samples=0,clock_starts=0;
-    std::chrono::nanoseconds elapsed{};
+    std::chrono::nanoseconds elapsed{}, last_elapsed{};
+    bool wait_for_key=false;
 };
 struct ReleaseOnExit{
     std::shared_ptr<Control> state;
@@ -30,15 +31,17 @@ struct ReleaseOnExit{
 };
 class Fake final:public host::Session{
 public:
-    explicit Fake(std::shared_ptr<Control> state):state_(std::move(state)){}
+    explicit Fake(std::shared_ptr<Control> state, host::FrameClock::duration interval=3ms)
+        : state_(std::move(state)), interval_(interval) {}
     host::Viewport viewport()const noexcept override{return {2,2};}
-    host::FrameClock::duration frame_interval()const noexcept override{return 3ms;}
+    host::FrameClock::duration frame_interval()const noexcept override{return interval_;}
     void set_frame_elapsed(std::chrono::nanoseconds value) noexcept override {
         std::lock_guard lock(state_->mutex);
         state_->clock_thread = std::this_thread::get_id();
         ++state_->clock_samples;
         if (value == 0ns) ++state_->clock_starts;
         state_->elapsed += value;
+        state_->last_elapsed = value;
     }
     std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_for_metal()override{
         std::lock_guard lock(state_->mutex);++state_->terrain_calls;state_->terrain_thread=std::this_thread::get_id();return terrain_;
@@ -47,11 +50,17 @@ public:
     void scene_available(bool ready)noexcept override{std::lock_guard lock(state_->mutex);state_->scene=ready;}
     void key_event(host::KeyEvent event)noexcept override{std::lock_guard lock(state_->mutex);state_->key=event.characters;}
     std::optional<host::Frame> advance_frame()override{
-        {std::unique_lock lock(state_->mutex);state_->entered=true;state_->frame_thread=std::this_thread::get_id();state_->changed.notify_all();state_->changed.wait(lock,[&]{return state_->released;});if(state_->fail_frame)throw std::runtime_error("synthetic frame failure");}
+        {
+            std::unique_lock lock(state_->mutex);
+            state_->entered=true;state_->frame_thread=std::this_thread::get_id();state_->changed.notify_all();
+            state_->changed.wait(lock,[&]{return state_->released;});
+            if(state_->fail_frame)throw std::runtime_error("synthetic frame failure");
+            if(state_->wait_for_key && state_->key.empty())return std::nullopt;
+        }
         const auto index=frames_++;pixels_.assign(16,std::uint8_t(index+1));scene_.step=index;
         return host::Frame{{index,1200,true},index%2?std::span<const std::uint8_t>{}:std::span<const std::uint8_t>{pixels_},{},index%2?&scene_:nullptr};
     }
-private:std::shared_ptr<Control> state_;std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_=std::make_shared<coastal::rts::view3d::TerrainMesh>();std::vector<std::uint8_t> pixels_;coastal::rts::view3d::SceneFrame scene_;std::uint64_t frames_=0;
+private:std::shared_ptr<Control> state_;host::FrameClock::duration interval_;std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_=std::make_shared<coastal::rts::view3d::TerrainMesh>();std::vector<std::uint8_t> pixels_;coastal::rts::view3d::SceneFrame scene_;std::uint64_t frames_=0;
 };
 host::Frame wait_frame(host::Session& s,std::span<std::uint8_t> target={}){
     const auto end=host::FrameClock::now()+2s;
@@ -117,6 +126,48 @@ void elapsed_time_belongs_to_the_producer() {
         if(state->clock_starts==2)return;
     }
     throw std::runtime_error("Resuming did not reset the clock on the simulation owner");
+}
+void wall_clock_backpressure() {
+    const host::LaunchOptions defaults;
+    require(defaults.producer_pacing == host::ProducerPacing::RuntimeInterval, "Default pacing changed");
+    auto state = std::make_shared<Control>();
+    state->released = true;
+    const auto session = host::make_presented_session(std::make_unique<Fake>(state, 5s),
+                                                      host::ProducerPacing::WallClockBackpressure);
+    // Nominal cadence is deliberately much longer than the test deadline.
+    (void)session->advance_frame();
+    {
+        std::unique_lock lock(state->mutex);
+        require(state->changed.wait_for(lock, 1s, [&]{return state->clock_samples == 2;}),
+                "Producer did not fill both FIFO slots");
+        require(!state->changed.wait_for(lock, 30ms, [&]{return state->clock_samples > 2;}),
+                "A full FIFO advanced the simulation");
+    }
+    require(wait_frame(*session).commit.index == 0, "First queued commit was replaced");
+    {
+        std::unique_lock lock(state->mutex);
+        require(state->changed.wait_for(lock, 1s, [&]{return state->clock_samples == 3;}),
+                "Consumer release did not unblock the producer");
+        require(state->last_elapsed >= 25ms, "Elapsed time omitted the wait for FIFO space");
+    }
+    require(wait_frame(*session).commit.index == 1, "Second queued commit was skipped");
+    require(wait_frame(*session).commit.index == 2, "Released FIFO lost its next commit");
+}
+void empty_wall_clock_session_waits_for_input() {
+    auto state = std::make_shared<Control>();
+    state->released = true;
+    state->wait_for_key = true;
+    auto session = host::make_presented_session(std::make_unique<Fake>(state, 5s),
+                                                host::ProducerPacing::WallClockBackpressure);
+    (void)session->advance_frame();
+    {
+        std::unique_lock lock(state->mutex);
+        require(state->changed.wait_for(lock, 1s, [&]{return state->entered;}), "No first attempt");
+        require(!state->changed.wait_for(lock, 30ms, [&]{return state->clock_samples > 1;}),
+                "Empty session retried continuously");
+    }
+    session->key_event({host::KeyEvent::Phase::Down, 1, 0, false, "go", "go"});
+    require(wait_frame(*session).commit.index == 0, "Input failed to wake idle producer");
 }
 void revoked_handler_does_not_receive_a_later_publication(){
     auto state=std::make_shared<Control>();
@@ -191,8 +242,8 @@ void diagnostic_failure(){
 }
 int main(){try{
     immutable_frames_and_inputs();borrowed_target_frames();producer_error();
-    elapsed_time_belongs_to_the_producer();
+    elapsed_time_belongs_to_the_producer();wall_clock_backpressure();empty_wall_clock_session_waits_for_input();
     revoked_handler_does_not_receive_a_later_publication();queued_ready_notifications_do_not_retain_a_closed_host();diagnostic_failure();
-    std::cout<<"MAC_HOST_PRESENTED_SESSION_PASS nonblocking=true immutablePixels=true immutableScene=true inputsOwned=true sequential=true cleanJoin=true borrowedTarget=true cachedTerrain=true forwardedError=true diagnosticNoThrow=true readyNotification=true handlerRevoked=true lateHostCallbackSafe=true\n";
+    std::cout<<"MAC_HOST_PRESENTED_SESSION_PASS nonblocking=true immutablePixels=true immutableScene=true inputsOwned=true sequential=true cleanJoin=true borrowedTarget=true cachedTerrain=true forwardedError=true diagnosticNoThrow=true wallFifo=true emptyWait=true inputWake=true readyNotification=true handlerRevoked=true lateHostCallbackSafe=true\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

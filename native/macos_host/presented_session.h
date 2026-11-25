@@ -17,4 +17,5 @@ namespace coastal::macos_host {
 // consumers must still poll on their host thread and release frames promptly.
 std::unique_ptr<coastal::macos_host::Session> make_presented_session(
     std::unique_ptr<coastal::macos_host::Session>);
+std::unique_ptr<Session> make_presented_session(std::unique_ptr<Session>, ProducerPacing);
 }

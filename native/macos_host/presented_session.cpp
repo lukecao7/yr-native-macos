@@ -51,7 +51,7 @@ struct Packet {
 };
 class PresentedSession final:public host::Session {
 public:
-    explicit PresentedSession(std::unique_ptr<host::Session> session):session_(std::move(session)),
+    PresentedSession(std::unique_ptr<host::Session> session, ProducerPacing pacing):session_(std::move(session)), pacing_(pacing),
         viewport_(session_->viewport()),interval_(session_->frame_interval()),terrain_(session_->terrain_for_metal()){}
     ~PresentedSession()override{
         set_frame_ready_handler({});
@@ -150,8 +150,10 @@ private:
                     if(ready_.size()>=2)++full_waits_;
                     condition_.wait(lock,[&]{return stopping_||ready_.size()<2;});
                     if(stopping_)return;
-                    condition_.wait_until(lock,due,[&]{return stopping_;});
-                    if(stopping_)return;
+                    if (pacing_ == ProducerPacing::RuntimeInterval) {
+                        condition_.wait_until(lock, due, [&]{return stopping_;});
+                        if (stopping_) return;
+                    }
                     inputs.swap(inputs_);
                 }
                 const auto began=host::FrameClock::now();
@@ -181,14 +183,21 @@ private:
                         notify=ready_handler_;
                     }
                     notify_ready(notify);
+                } else if (pacing_ == ProducerPacing::WallClockBackpressure) {
+                    // An empty frame leaves no FIFO entry for the host to release.
+                    // Sleep until input, shutdown, or the runtime's next retry.
+                    std::unique_lock lock(mutex_);
+                    condition_.wait_for(lock, interval_, [&]{return stopping_ || !inputs_.empty();});
                 }
-                // Never skip a simulation frame or fabricate a repeated commit.
-                // A slow producer is visible as a real missing presentation.
-                due+=interval_;if(due<host::FrameClock::now()-interval_)due=host::FrameClock::now();
+                if (pacing_ == ProducerPacing::RuntimeInterval) {
+                    due += interval_;
+                    if (due < host::FrameClock::now() - interval_) due = host::FrameClock::now();
+                }
             }
         }catch(...){fail(std::current_exception());}
     }
     std::unique_ptr<host::Session> session_;
+    const ProducerPacing pacing_;
     host::Viewport viewport_;
     host::FrameClock::duration interval_;
     const std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_;
@@ -208,6 +217,9 @@ private:
 };
 }
 std::unique_ptr<host::Session> make_presented_session(std::unique_ptr<host::Session> session){
-    return session?std::make_unique<PresentedSession>(std::move(session)):nullptr;
+    return make_presented_session(std::move(session), ProducerPacing::RuntimeInterval);
+}
+std::unique_ptr<host::Session> make_presented_session(std::unique_ptr<host::Session> session, ProducerPacing pacing){
+    return session?std::make_unique<PresentedSession>(std::move(session), pacing):nullptr;
 }
 }
