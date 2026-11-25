@@ -45,6 +45,7 @@ struct ReadyHandler {
     std::atomic<bool> active{true};
 };
 struct Packet {
+    bool software_cursor = false;
     host::FrameCommit commit{};
     std::vector<std::uint8_t> pixels;
     std::optional<coastal::rts::view3d::SceneFrame> scene;
@@ -52,7 +53,8 @@ struct Packet {
 class PresentedSession final:public host::Session {
 public:
     PresentedSession(std::unique_ptr<host::Session> session, ProducerPacing pacing):session_(std::move(session)), pacing_(pacing),
-        viewport_(session_->viewport()),interval_(session_->frame_interval()),terrain_(session_->terrain_for_metal()){}
+        viewport_(session_->viewport()),interval_(session_->frame_interval()),terrain_(session_->terrain_for_metal()),
+        software_cursor_(session_->has_software_cursor()){}
     ~PresentedSession()override{
         set_frame_ready_handler({});
         {std::lock_guard lock(mutex_);stopping_=true;}
@@ -69,6 +71,7 @@ public:
     }
     host::Viewport viewport()const noexcept override{return viewport_;}
     host::FrameClock::duration frame_interval()const noexcept override{return interval_;}
+    bool has_software_cursor()const noexcept override {return software_cursor_.load(std::memory_order_acquire);}
     bool supports_shared_frames()const noexcept override{return true;}
     bool supports_frame_ready_notifications()const noexcept override{return true;}
     void set_frame_ready_handler(FrameReadyHandler callback)noexcept override{
@@ -125,6 +128,7 @@ private:
             if(!producer_.joinable())producer_=std::thread([this]{produce();});
             if(ready_.empty()){++empty_polls_;return std::nullopt;}
             packet=std::move(ready_.front());ready_.pop_front();
+            software_cursor_.store(packet->software_cursor,std::memory_order_release);
             ++delivered_;
         }
         condition_.notify_all();
@@ -170,6 +174,7 @@ private:
                 session_->set_frame_elapsed(clock.sample());
                 auto frame=session_->supports_shared_frames()?session_->advance_frame_into(packet->pixels):session_->advance_frame();
                 if(frame){
+                    packet->software_cursor=session_->has_software_cursor();
                     packet->commit=frame->commit;
                     if(frame->scene)packet->scene=*frame->scene;
                     else {packet->scene.reset();if(frame->rgba.data()!=packet->pixels.data())packet->pixels.assign(frame->rgba.begin(),frame->rgba.end());}
@@ -201,6 +206,7 @@ private:
     host::Viewport viewport_;
     host::FrameClock::duration interval_;
     const std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_;
+    std::atomic<bool> software_cursor_;
     std::atomic<bool> reset_clock_{false};
     std::mutex mutex_;
     std::condition_variable condition_;

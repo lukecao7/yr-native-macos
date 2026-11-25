@@ -203,6 +203,7 @@ void install_quit_menu(NSApplication* application) {
 }
 
 - (host::FramePresentation)presentFrame:(const host::Frame&)frame {
+    [self syncFrameCursor];
     if (_metal) return [_metal presentFrame:frame];
     auto* image = host::create_rgba_frame_image(_viewport, frame, _colorSpace);
     if (!image) return host::FramePresentation::Invalid;
