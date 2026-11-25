@@ -21,6 +21,7 @@ bool ReachabilityCache::valid_grid(int width, int height,
 
 std::size_t ReachabilityCache::build_labels(int width, int height,
                                            const std::vector<unsigned char>& grid,
+                                           const std::vector<unsigned char>& edges,
                                            std::vector<std::int32_t>& labels) {
     labels.assign(grid.size(), -1);
     std::vector<int> frontier;
@@ -38,8 +39,13 @@ std::size_t ReachabilityCache::build_labels(int width, int height,
             const int cell = frontier[at], x = cell % width, z = cell / width;
             const int neighbors[4] = {x > 0 ? cell - 1 : -1, x + 1 < width ? cell + 1 : -1,
                                      z > 0 ? cell - width : -1, z + 1 < height ? cell + width : -1};
-            for (int next : neighbors) {
+            constexpr unsigned direction_bits[4] = {3, 4, 1, 6};
+            for (unsigned direction = 0; direction < 4; ++direction) {
+                const int next = neighbors[direction];
                 if (next < 0 || grid[std::size_t(next)] || labels[std::size_t(next)] >= 0) continue;
+                const auto bit = direction_bits[direction];
+                if (!edges.empty() && (!(edges[std::size_t(cell)] & (1u << bit)) ||
+                                       !(edges[std::size_t(next)] & (1u << (7 - bit))))) continue;
                 labels[std::size_t(next)] = component;
                 frontier.push_back(next);
             }
@@ -50,16 +56,23 @@ std::size_t ReachabilityCache::build_labels(int width, int height,
 }
 
 bool ReachabilityCache::update(int width, int height,
-                               const std::vector<unsigned char>& blocked, std::string& error) {
+                               const std::vector<unsigned char>& blocked, std::string& error,
+                               const std::vector<unsigned char>& edges) {
     error.clear();
     if (!valid_grid(width, height, blocked, error)) return false;
-    if (ready() && width_ == width && height_ == height && blocked_ == blocked) return true;
+    if (!edges.empty() && edges.size() != blocked.size()) {
+        error = "invalid reachability edge grid length";
+        return false;
+    }
+    if (ready() && width_ == width && height_ == height && blocked_ == blocked && edges_ == edges) return true;
     try {
         auto new_grid = blocked;
+        auto new_edges = edges;
         std::vector<std::int32_t> new_labels;
-        const auto components = build_labels(width, height, new_grid, new_labels);
+        const auto components = build_labels(width, height, new_grid, new_edges, new_labels);
         // Everything that can allocate has completed. Publish one candidate.
         blocked_.swap(new_grid);
+        edges_.swap(new_edges);
         labels_.swap(new_labels);
         width_ = width;
         height_ = height;
@@ -100,7 +113,7 @@ bool ReachabilityCache::preserves_connections(const std::vector<unsigned char>& 
         ConnectionPreservation candidate;
         std::vector<std::int32_t> new_labels;
         const bool identical = blocked_ == candidate_blocked;
-        if (!identical && !pairs.empty()) build_labels(width_, height_, candidate_blocked, new_labels);
+        if (!identical && !pairs.empty()) build_labels(width_, height_, candidate_blocked, edges_, new_labels);
         for (std::size_t index = 0; index < pairs.size(); ++index) {
             const auto& pair = pairs[index];
             if (!connected(pair.from, pair.to)) continue;

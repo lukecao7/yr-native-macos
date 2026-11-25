@@ -32,8 +32,11 @@ public:
     // Identical dimensions and actual bytes reuse labels, independently of
     // any host revision counter. Rejects non-binary grids and commits only a
     // completely built candidate; failure leaves the previous cache intact.
+    // Optional imported edges use NW,N,NE,W,E,SW,S,SE. As in FlowCache,
+    // both endpoints must allow an edge and diagonals need cardinal detours.
     bool update(int width, int height,
-                const std::vector<unsigned char>& blocked, std::string& error);
+                const std::vector<unsigned char>& blocked, std::string& error,
+                const std::vector<unsigned char>& edges = {});
 
     bool connected(int from, int to) const noexcept;
     bool ready() const noexcept;
@@ -59,6 +62,7 @@ private:
     int width_ = 0;
     int height_ = 0;
     std::vector<unsigned char> blocked_;
+    std::vector<unsigned char> edges_;
     std::vector<std::int32_t> labels_;
     std::size_t components_ = 0;
     std::uint64_t builds_ = 0;
@@ -67,6 +71,7 @@ private:
                            const std::vector<unsigned char>& grid, std::string& error);
     static std::size_t build_labels(int width, int height,
                                     const std::vector<unsigned char>& grid,
+                                    const std::vector<unsigned char>& edges,
                                     std::vector<std::int32_t>& labels);
 };
 
