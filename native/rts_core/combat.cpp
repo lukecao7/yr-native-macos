@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <iterator>
 #include <limits>
@@ -812,9 +813,16 @@ void tick_combat(World& world, Navigator& navigator) {
     // routes need a second dispatch after the owner has prepared the fields.
     if (std::any_of(intents.begin(), intents.end(), [](const Intent& intent) { return intent.moves.incomplete; })) {
         profiling::Scope workers(navigator.profile_, Phase::WorkersWall);
-        navigator.workers_.run(intents.size(), [&](unsigned, std::size_t begin, std::size_t end) {
-            for (std::size_t i = begin; i < end; ++i) {
-                if (intents[i].moves.incomplete) evaluate_move(intents[i], snapshot.entities[i]);
+        constexpr std::size_t chunk_size = 32;
+        std::atomic<std::size_t> next{0};
+        navigator.workers_.run_shared_queue(lanes, [&](unsigned, std::size_t, std::size_t) {
+            for (;;) {
+                const auto begin = next.fetch_add(chunk_size, std::memory_order_relaxed);
+                if (begin >= intents.size()) break;
+                const auto end = std::min(intents.size(), begin + chunk_size);
+                for (auto i = begin; i < end; ++i) {
+                    if (intents[i].moves.incomplete) evaluate_move(intents[i], snapshot.entities[i]);
+                }
             }
         });
     }

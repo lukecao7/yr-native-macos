@@ -30,6 +30,10 @@ public:
 
     unsigned count() const noexcept;
     void run(std::size_t items, const Job& job);
+    // Each callback drains the same shared queue until no item is left to
+    // claim. Its range is only a lane-count hint. Still join all callbacks
+    // that started, but skip a helper whose callback has not been claimed.
+    void run_shared_queue(std::size_t lane_hint, const Job& drain);
     const std::vector<WorkerUsage>& usage() const noexcept;
 
 private:

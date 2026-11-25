@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
+#include <latch>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -121,6 +123,40 @@ void alternating_participants_and_errors() {
             "A stale mailbox survived error recovery");
 }
 
+void shared_queue_dispatch() {
+    for (unsigned lanes : {1, 4, 8}) {
+        WorkerPool pool(lanes);
+        for (unsigned round = 0; round < 256; ++round) {
+            std::array<std::atomic<unsigned>, 29> visits{};
+            std::atomic<std::size_t> next{0};
+            pool.run_shared_queue(lanes, [&](unsigned, std::size_t, std::size_t) {
+                for (auto i = next.fetch_add(1); i < visits.size(); i = next.fetch_add(1)) {
+                    ++visits[i];
+                }
+            });
+            for (const auto& visit : visits) require(visit.load() == 1, "Each shared item must run exactly once");
+        }
+    }
+    WorkerPool pool(2);
+    std::latch started(2);
+    bool helper_completed = false;
+    try {
+        pool.run_shared_queue(2, [&](unsigned lane, std::size_t, std::size_t) {
+            started.arrive_and_wait();
+            if (lane == 1) {
+                helper_completed = true;
+                throw std::runtime_error("claimed helper");
+            }
+        });
+        require(false, "A claimed helper's exception must reach the owner");
+    } catch (const std::runtime_error& error) {
+        require(helper_completed && std::string(error.what()) == "claimed helper", "The owner must join claimed helpers");
+    }
+    pool.run(1, [](unsigned lane, std::size_t begin, std::size_t end) {
+        require(lane == 0 && begin == 0 && end == 1, "A failed shared queue must allow the next fixed dispatch");
+    });
+}
+
 void parallel_world() {
     World initial;
     initial.map.width = 28;
@@ -179,6 +215,7 @@ int main() {
     dispatch_and_reuse();
     join_on_error();
     alternating_participants_and_errors();
+    shared_queue_dispatch();
     parallel_world();
     std::cout << "RTS worker tests passed (persistent lanes, exception joins, visibility and ordered combat)\n";
 }
