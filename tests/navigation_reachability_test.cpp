@@ -1,4 +1,5 @@
 #include "../native/navigation/reachability.h"
+#include "rts_core/world.h"
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -193,6 +194,64 @@ void deterministic_oracles() {
     check(previews_equal, "All64 mixed close-open candidate batches match original and candidate independent graph oracles");
     check(stable, "Independent builds have stable integer labels and all candidate calls leave their base unchanged");
 }
+void authored_edges() {
+    namespace rts=coastal::rts;
+    ReachabilityCache cache;
+    std::string error;
+    constexpr unsigned east=1U<<4, west=1U<<3;
+    std::vector<unsigned char> open(6,0), edges(6,0xff);
+    edges[1]&=~east;
+    edges[4]&=~east;
+    check(cache.update(3,2,open,error,edges) && !cache.connected(0,5) && cache.connected(0,4),
+          "Authored cardinal closures at only one endpoint still block both directions and diagonal shortcuts");
+    const auto cut=freeze(cache);
+    check(cache.update(3,2,open,error,edges) && unchanged(cache,cut) &&
+          !cache.update(3,2,open,error,{0xff}) && unchanged(cache,cut),
+          "Live authored edge bytes reuse the same cache and malformed edge counts preserve it");
+    edges[4]|=east;
+    edges[5]&=~west;
+    const bool one_sided=cache.update(3,2,open,error,edges) && !cache.connected(0,5);
+    edges[5]|=west;
+    check(one_sided && cache.update(3,2,open,error,edges) && cache.connected(0,5),
+          "Opening both bridge endpoints restores the path with unchanged tile passability");
+    auto blocked=open;
+    blocked[4]=1;
+    ConnectionPreservation result;
+    check(cache.preserves_connections(blocked,{{0,5}},result,error) && !result.preserved &&
+          cache.update(3,2,blocked,error,edges) && !cache.connected(0,5),
+          "A building footprint or class-forbidden land disconnects a one-cell crossing");
+
+    std::mt19937 random(0xCEA612U);
+    bool matches=true;
+    for(int iteration=0;iteration<48&&matches;++iteration){
+        rts::Map map;
+        map.width=8;map.height=7;
+        map.tiles.resize(std::size_t(map.width)*map.height);
+        map.travel_edges.resize(map.tiles.size());
+        std::vector<unsigned char> mask(map.tiles.size());
+        for(std::size_t i=0;i<mask.size();++i){
+            mask[i]=random()%8==0;
+            map.tiles[i].terrain=mask[i]?rts::Terrain::Rock:rts::Terrain::Ground;
+            map.travel_edges[i]=static_cast<unsigned char>(random()|0x24U);
+        }
+        matches=cache.update(map.width,map.height,mask,error,map.travel_edges);
+        for(int start=0;start<int(mask.size())&&matches;++start){
+            std::vector<bool> seen(mask.size());
+            std::queue<rts::Cell> visits;
+            if(map.walkable(map.cell(start))){seen[start]=true;visits.push(map.cell(start));}
+            while(!visits.empty()){
+                const auto here=visits.front();visits.pop();
+                for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x){
+                    const rts::Cell next{here.x+x,here.y+y};
+                    if(!map.can_travel(here,next)||seen[map.index(next)])continue;
+                    seen[map.index(next)]=true;visits.push(next);
+                }
+            }
+            for(int to=0;to<int(mask.size());++to)matches&=cache.connected(start,to)==seen[to];
+        }
+    }
+    check(matches,"Every pair on 48 imported-edge maps matches the existing native eight-way movement graph");
+}
 void report(std::ostream& stream) {
     const bool passed = std::all_of(checks.begin(), checks.end(), [](const auto& row) { return row.passed; });
     stream << "{\"all_passed\":" << (passed ? "true" : "false") << ",\"check_count\":" << checks.size() << ",\"checks\":[";
@@ -204,7 +263,7 @@ void report(std::ostream& stream) {
 }
 } // namespace
 int main(int argc, char** argv) {
-    basics(); corners_and_boundaries(); previews(); deterministic_oracles();
+    basics(); corners_and_boundaries(); previews(); deterministic_oracles(); authored_edges();
     if (argc == 2) {
         std::ofstream output(argv[1]);
         if (!output) { std::cerr << "Cannot write report\n"; return 2; }
