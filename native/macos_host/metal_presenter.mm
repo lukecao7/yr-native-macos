@@ -79,10 +79,7 @@ bool retire_submissions(std::array<FrameBuffer, buffer_count>& buffers) {
     return true;
 }
 
-struct PresentedFrame {
-    CFTimeInterval time = 0;
-    bool scene = false;
-};
+using host::PresentedFrame;
 
 std::optional<host::Percentiles> summarize_intervals(std::vector<std::chrono::nanoseconds>& values) {
     if (values.empty()) return std::nullopt;
@@ -103,10 +100,9 @@ public:
         work_[kind][work_count_[kind]++ % presentation_samples]=elapsed;
     }
     void record(CFTimeInterval displayed_at, bool scene, host::FrameCommit commit) {
-        if (displayed_at <= 0 || !std::isfinite(displayed_at)) return;
         const std::lock_guard lock(mutex_);
-        times_[count_ % times_.size()] = {displayed_at, scene};
-        ++count_;
+        if (!clock_.record(displayed_at)) return;
+        times_[(clock_.valid_count() - 1) % times_.size()] = {displayed_at, scene};
         if (scene) ++scene_count_;
         if (commit.full_original_frame) {
             ++original_count_;
@@ -119,15 +115,17 @@ public:
 
     host::MetalMetrics metrics() const {
         host::MetalMetrics result;
+        host::DisplayClock clock;
         std::vector<PresentedFrame> times;
         std::array<std::vector<std::chrono::nanoseconds>,2> work;
         {
             const std::lock_guard lock(mutex_);
-            result.displayed_frames = count_;
+            clock = clock_;
+            result.displayed_frames = clock.valid_count();
             result.displayed_original_frames = original_count_;
             result.last_original_active_objects = last_original_objects_;
             result.displayed_scene_frames = scene_count_;
-            const auto size = std::min<std::uint64_t>(count_, times_.size());
+            const auto size = std::min<std::uint64_t>(clock.valid_count(), times_.size());
             times.assign(times_.begin(), times_.begin() + size);
             for(std::size_t kind=0;kind<work.size();++kind){
                 const auto count=std::min<std::uint64_t>(work_count_[kind],presentation_samples);
@@ -136,12 +134,12 @@ public:
         }
         result.drawable_acquire=summarize_intervals(work[0]);
         result.encode_submit=summarize_intervals(work[1]);
-        if (times.size() < 2) return result;
-
         // Callback delivery order can differ from the actual display order.
         std::sort(times.begin(), times.end(), [](const PresentedFrame& a, const PresentedFrame& b) {
             return a.time < b.time;
         });
+        result.display_clock = clock.summarize_sorted(times);
+        if (times.size() < 2) return result;
         std::vector<std::chrono::nanoseconds> intervals;
         std::vector<std::chrono::nanoseconds> scene_intervals;
         intervals.reserve(times.size() - 1);
@@ -165,7 +163,7 @@ public:
 private:
     mutable std::mutex mutex_;
     std::array<PresentedFrame, presentation_samples> times_{};
-    std::uint64_t count_ = 0;
+    host::DisplayClock clock_;
     std::uint64_t original_count_ = 0;
     CFTimeInterval last_original_time_ = 0;
     std::optional<std::uint64_t> last_original_objects_;

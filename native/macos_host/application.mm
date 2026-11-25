@@ -19,8 +19,10 @@
 #include <atomic>
 #include <cmath>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -37,6 +39,29 @@ void write_percentiles(const std::optional<host::Percentiles>& percentiles) {
               << ",\"p50Ns\":" << percentiles->p50.count()
               << ",\"p95Ns\":" << percentiles->p95.count()
               << ",\"p99Ns\":" << percentiles->p99.count() << '}';
+}
+
+void write_display_clock(const host::DisplayClockMetrics& clock) {
+    std::ostringstream output;
+    output << std::setprecision(std::numeric_limits<double>::max_digits10)
+           << "{\"source\":\"CAMetalDrawable.presentedTime\",\"unit\":\"host seconds\""
+           << ",\"validCallbacks\":" << clock.valid_callbacks
+           << ",\"invalidCallbacks\":" << clock.invalid_callbacks
+           << ",\"outOfOrderCallbacks\":" << clock.out_of_order
+           << ",\"adjacentDuplicateCallbacks\":" << clock.adjacent_duplicates
+           << ",\"retainedCallbacks\":" << clock.retained_callbacks;
+    const auto quantity = [&output](const char* name, const auto& value) {
+        output << ",\"" << name << "\":";
+        if (value) output << *value; else output << "null";
+    };
+    quantity("firstPresentedTime", clock.first_seconds);
+    quantity("lastPresentedTime", clock.last_seconds);
+    quantity("uniqueTimes", clock.unique_times);
+    quantity("duplicateCallbacks", clock.duplicate_callbacks);
+    quantity("uniqueIntervals", clock.unique_intervals);
+    quantity("elapsedSeconds", clock.elapsed_seconds);
+    quantity("averageDisplayedFps", clock.average_fps);
+    std::cout << output.str() << '}';
 }
 
 void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = {},
@@ -73,6 +98,9 @@ void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = 
     write_percentiles(metrics.frame_work);
     std::cout << ",\"presentationInterval\":";
     write_percentiles(metal ? metal->display_interval : metrics.presentation_interval);
+    std::cout << ",\"physicalDisplayClock\":";
+    if (metal) write_display_clock(metal->display_clock);
+    else std::cout << "null";
     std::cout << ",\"display3dInterval\":";
     write_percentiles(metal ? metal->scene_interval : std::nullopt);
     std::cout << ",\"drawableAcquire\":";

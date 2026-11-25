@@ -3,6 +3,7 @@
 
 #import <QuartzCore/CAMetalLayer.h>
 
+#include "display_clock.h"
 #include "frame_delivery.h"
 
 namespace coastal::macos_host {
@@ -14,6 +15,7 @@ struct MetalMetrics {
     std::uint64_t displayed_scene_frames = 0;
     std::size_t mode_switches = 0;
     std::optional<Percentiles> display_interval;
+    DisplayClockMetrics display_clock;
     std::optional<Percentiles> scene_interval;
     std::optional<Percentiles> drawable_acquire;
     std::optional<Percentiles> encode_submit;
