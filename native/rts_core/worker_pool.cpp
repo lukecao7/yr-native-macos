@@ -100,7 +100,7 @@ struct WorkerPool::Impl {
         }
     }
 
-    void run(std::size_t items, const Job& task) {
+    void run(std::size_t items, const Job& task, bool shared_queue = false) {
         if (!items) return;
         if (!task) throw std::invalid_argument("Worker pool requires a job.");
         if (dispatching.test_and_set(std::memory_order_acquire)) {
@@ -132,6 +132,19 @@ struct WorkerPool::Impl {
             }
             execute(0, items, lanes, task);
             std::unique_lock lock(mutex);
+            if (shared_queue && !failures[0]) {
+                // Lane zero exhausted the caller's shared claim counter.
+                // A worker releases its mailbox before it can join here,
+                // so holding the completion lock cannot block its execute.
+                for (unsigned lane = 1; lane < lanes && remaining; ++lane) {
+                    auto& wakeup = wakeups[lane];
+                    std::lock_guard pending(wakeup.mutex);
+                    if (wakeup.task == &task) {
+                        wakeup.task = nullptr;
+                        --remaining;
+                    }
+                }
+            }
             joined.wait(lock, [&] { return !remaining; });
         }
         for (unsigned lane = 0; lane < lanes; ++lane) {
@@ -164,6 +177,7 @@ WorkerPool& WorkerPool::operator=(WorkerPool&&) noexcept = default;
 
 unsigned WorkerPool::count() const noexcept { return impl_->count; }
 void WorkerPool::run(std::size_t items, const Job& job) { impl_->run(items, job); }
+void WorkerPool::run_shared_queue(std::size_t lane_hint, const Job& drain) { impl_->run(lane_hint, drain, true); }
 const std::vector<WorkerUsage>& WorkerPool::usage() const noexcept { return impl_->usage; }
 
 }  // namespace coastal::rts
