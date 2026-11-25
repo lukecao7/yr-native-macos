@@ -20,6 +20,9 @@ struct Control{
     bool entered=false,released=false,fail_frame=false;
     std::string key;bool scene=false;std::size_t terrain_calls=0;
     std::thread::id terrain_thread,frame_thread;
+    std::thread::id clock_thread;
+    std::size_t clock_samples=0,clock_starts=0;
+    std::chrono::nanoseconds elapsed{};
 };
 struct ReleaseOnExit{
     std::shared_ptr<Control> state;
@@ -30,6 +33,13 @@ public:
     explicit Fake(std::shared_ptr<Control> state):state_(std::move(state)){}
     host::Viewport viewport()const noexcept override{return {2,2};}
     host::FrameClock::duration frame_interval()const noexcept override{return 3ms;}
+    void set_frame_elapsed(std::chrono::nanoseconds value) noexcept override {
+        std::lock_guard lock(state_->mutex);
+        state_->clock_thread = std::this_thread::get_id();
+        ++state_->clock_samples;
+        if (value == 0ns) ++state_->clock_starts;
+        state_->elapsed += value;
+    }
     std::shared_ptr<const coastal::rts::view3d::TerrainMesh> terrain_for_metal()override{
         std::lock_guard lock(state_->mutex);++state_->terrain_calls;state_->terrain_thread=std::this_thread::get_id();return terrain_;
     }
@@ -84,6 +94,29 @@ void producer_error(){
     bool forwarded=false;
     try{(void)wait_frame(*session);}catch(const std::runtime_error& error){forwarded=std::string(error.what())=="synthetic frame failure";}
     require(forwarded,"producer exception was lost or escaped its thread");
+}
+void elapsed_time_belongs_to_the_producer() {
+    auto state=std::make_shared<Control>();
+    state->released=true;
+    auto session=host::make_presented_session(std::make_unique<Fake>(state));
+    wait_frame(*session);
+    wait_frame(*session);
+    {
+        std::lock_guard lock(state->mutex);
+        require(state->clock_samples>=2 && state->clock_starts==1 && state->elapsed>0ns,
+                "A running producer must initialize once and receive physical elapsed time");
+        require(state->clock_thread==state->frame_thread && state->clock_thread!=std::this_thread::get_id(),
+                "The simulation owner must sample its own clock");
+    }
+    session->reset_frame_elapsed();
+    // Consume any pictures already published before the main thread resumed.
+    const auto deadline=host::FrameClock::now()+2s;
+    while(host::FrameClock::now()<deadline) {
+        wait_frame(*session);
+        std::lock_guard lock(state->mutex);
+        if(state->clock_starts==2)return;
+    }
+    throw std::runtime_error("Resuming did not reset the clock on the simulation owner");
 }
 void revoked_handler_does_not_receive_a_later_publication(){
     auto state=std::make_shared<Control>();
@@ -158,6 +191,7 @@ void diagnostic_failure(){
 }
 int main(){try{
     immutable_frames_and_inputs();borrowed_target_frames();producer_error();
+    elapsed_time_belongs_to_the_producer();
     revoked_handler_does_not_receive_a_later_publication();queued_ready_notifications_do_not_retain_a_closed_host();diagnostic_failure();
     std::cout<<"MAC_HOST_PRESENTED_SESSION_PASS nonblocking=true immutablePixels=true immutableScene=true inputsOwned=true sequential=true cleanJoin=true borrowedTarget=true cachedTerrain=true forwardedError=true diagnosticNoThrow=true readyNotification=true handlerRevoked=true lateHostCallbackSafe=true\n";
     return 0;

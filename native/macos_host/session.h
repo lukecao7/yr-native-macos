@@ -81,6 +81,10 @@ public:
     virtual ~Session() = default;
     virtual Viewport viewport() const noexcept = 0;
     virtual FrameClock::duration frame_interval() const noexcept = 0;
+    // A real-time frame producer supplies this interval immediately before
+    // advancing. The first frame after startup or resume receives zero.
+    virtual void set_frame_elapsed(std::chrono::nanoseconds) noexcept {}
+    virtual void reset_frame_elapsed() noexcept {}
     // Called by the AppKit main thread. Return promptly and report no frame
     // while waiting for work. Each ready frame gets a sequential index.
     virtual std::optional<Frame> advance_frame() = 0;
