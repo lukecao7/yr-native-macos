@@ -20,6 +20,8 @@ struct MetalMetrics {
     std::optional<Percentiles> drawable_acquire;
     std::optional<Percentiles> encode_submit;
     std::chrono::nanoseconds max_switch_interval{};
+    std::uint64_t submitted_frames = 0;
+    std::uint64_t submitted_original_frames = 0;
 };
 
 }

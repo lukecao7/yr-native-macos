@@ -74,12 +74,12 @@ void write_metrics(const host::FrameMetrics& metrics, host::Viewport viewport = 
     std::cout << ",\"viewportWidth\":" << viewport.width
               << ",\"viewportHeight\":" << viewport.height
               << ",\"presentedFrames\":" << (metal ? metal->displayed_frames : metrics.presented_frames)
-              << ",\"submittedFrames\":" << metrics.presented_frames
+              << ",\"submittedFrames\":" << (metal ? metal->submitted_frames : metrics.presented_frames)
               << ",\"displayed3dFrames\":" << (metal ? metal->displayed_scene_frames : 0)
               << ",\"displayedModeSwitches\":" << (metal ? metal->mode_switches : 0)
               << ",\"maxSwitchIntervalNs\":" << (metal ? metal->max_switch_interval.count() : 0)
               << ",\"fullOriginalFrames\":" << (metal ? metal->displayed_original_frames : metrics.full_original_frames)
-              << ",\"submittedFullOriginalFrames\":" << metrics.full_original_frames
+              << ",\"submittedFullOriginalFrames\":" << (metal ? metal->submitted_original_frames : metrics.full_original_frames)
               << ",\"lastOriginalActiveObjects\":";
     const auto original_objects = metal ? metal->last_original_active_objects : metrics.last_original_active_objects;
     if (original_objects) std::cout << *original_objects;

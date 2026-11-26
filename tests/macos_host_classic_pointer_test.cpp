@@ -110,6 +110,9 @@ public:
         while (FrameClock::now() < deadline && (!delivered || file_identity(save_) == before)) {
             if (auto frame = runtime->advance_frame()) {
                 require(!frame->scene && frame->rgba.size() == 1024 * 768 * 4, "Receive a rendered 2D frame.");
+                require(frame->commit.index == delivered &&
+                        frame->commit.requires_display_confirmation == (delivered == 0),
+                        "The normal session marks only its first completed 2D frame.");
                 last_frame_.assign(frame->rgba.begin(), frame->rgba.end());
                 ++delivered;
                 if (!saved && delivered >= ticks) { key(*runtime, 96); saved = true; }

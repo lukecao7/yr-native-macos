@@ -7,8 +7,8 @@
 
 namespace coastal::macos_host {
 
-// Presented means a real backend submission; Metal scan-out remains measured
-// by the drawable's presented handler.
+// Presented accepts a frame for the backend. A marked Metal frame is
+// accepted only after its drawable's presented handler confirms display.
 enum class FramePresentation { Presented, Unavailable, Invalid };
 
 // Main-thread delivery of one ready frame. A temporarily unavailable surface
