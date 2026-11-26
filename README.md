@@ -54,7 +54,9 @@ make
 
 设置环境变量 `COASTAL_PRESENTED_TRACE` 为新文件的绝对路径后，Metal 窗口退出时会保存 JSON。它按系统回调到达顺序保留至多 32,769 个正且有限的 drawable 呈现时间。文件也记录有效与无效回调总数。超出上限时，`truncated` 为真，`firstRetainedCallbackIndex` 给出省略的有效回调数量。已有文件会保留。
 
-支持共享帧缓冲的运行时可直接向 Metal 共享内存绘制。宿主在 Metal 无法初始化时回退到 Core Graphics。退出时终端会记录显示帧数、提交帧数、帧间隔分位数和峰值内存。Metal 显示帧间隔来自系统的 drawable 呈现回调。 共享像素槽先完成 CPU 绘图，再在编码屏幕绘制前获取显示缓冲。显示缓冲暂时不可用时，保留同一待呈现帧并重试，不额外推进对局；`drawableAcquire` 和 `encodeAndSubmit` 分别记录缓冲等待与编码提交耗时，便于分清游戏计算与显示等待。 `fullOriginalFrames` 也只累计系统实际显示、且由运行时标为完整原版画面的帧；菜单和暂停画面不计入，换局不清零。`submittedFullOriginalFrames` 单独记录提交数量。`activeObjects` 是当前画面的对象数，`lastOriginalActiveObjects` 保留最后一帧原版画面的对象数，返回大厅后可据此区分两种口径。
+支持共享帧缓冲的运行时可直接向 Metal 共享内存绘制。宿主在 Metal 无法初始化时回退到 Core Graphics。退出时终端会记录显示帧数、提交帧数、帧间隔分位数和峰值内存。共享像素槽先完成 CPU 绘图，再获取显示缓冲。显示缓冲暂时不可用时，宿主保留同一帧重试，对局不会因重试多走一步。`drawableAcquire` 和 `encodeAndSubmit` 分别记录获取缓冲、编码和提交的耗时。
+
+Metal 的 `submittedFrames` 在每次提交绘制一帧的命令缓冲时计一次，重投同一帧也计一次。`presentedFrames` 和显示帧间隔来自系统的 drawable 呈现回调。`submittedFullOriginalFrames` 统计由运行时标记为完整原版画面的提交次数，`fullOriginalFrames` 统计这类画面的实际显示次数。菜单和暂停画面不计入这两个原版画面计数，换局后继续累计。Core Graphics 按宿主成功绘制的帧计数。`activeObjects` 是当前画面的对象数，`lastOriginalActiveObjects` 保留最后一帧原版画面的对象数。
 
 ```sh
 make macos-host-fixture
@@ -89,7 +91,9 @@ JSONL
 
 宿主按屏幕的 `CVDisplayLink` 刷新脉冲呈现，异步会话在新帧就绪时发通知。每个脉冲最多提交一帧，空帧最多补试一次；缺帧仍反映在真实 drawable 呈现间隔中。组件保留两个就绪帧、最多四份不可变快照，并通过背压等待，不跳过模拟帧。Mac 上的生产线程使用标准 `USER_INITIATED` 优先级。
 
-普通 Metal 窗口关闭后，`MAC_HOST_METRICS.physicalDisplayClock` 报告实际呈现的首尾时刻、间隔数和平均 FPS。重复的屏幕时间只计一次。如果回调乱序且早期记录已从采样缓冲区移出，平均 FPS 显示为 `null`。
+普通自制对局会标记首张完成的二维图。Metal 收到这张图的实际显示时间后才提交后续帧。若系统跳过该 drawable，宿主会在 GPU 释放缓冲后重投同一帧，沿用原有刷新节拍。会话可通过 `FrameCommit::requires_display_confirmation` 标记需要相同处理的二维帧。
+
+普通 Metal 窗口关闭后，`MAC_HOST_METRICS.physicalDisplayClock` 报告实际呈现的首尾时刻、间隔数和平均 FPS。`firstHostFrameNs` 是从启动到宿主接受首帧的耗时，标记帧在宿主查到显示确认后才计入。重复的屏幕时间只计一次。如果回调乱序且早期记录已从采样缓冲区移出，平均 FPS 显示为 `null`。
 
 C++ 宿主可将 `LaunchOptions::producer_pacing` 设为 `ProducerPacing::WallClockBackpressure`。队列最多保存两帧。生产线程在队列有空位时推进，每次将实际经过的时间传给模拟。默认模式使用会话指定的帧间隔。
 

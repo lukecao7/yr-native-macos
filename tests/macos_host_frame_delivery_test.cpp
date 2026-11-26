@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#include "macos_host/display_confirmation.h"
 #include "macos_host/frame_delivery.h"
 #include "rts_3d/scene.h"
 
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -125,6 +128,80 @@ void retry_the_same_frame(bool scene_mode) {
            "The next new frame remains consecutive and reuses pixels only after submission");
 }
 
+void confirm_display_before_releasing_first_frame() {
+    using Poll = host::DisplayConfirmation::Poll;
+    host::FrameClock::time_point time{};
+    host::FrameLoop loop{10ms, time, [&] { return time; }};
+    host::FrameDelivery delivery;
+    std::array<std::uint8_t, 16> pixels{};
+    std::vector<std::uint64_t> submissions;
+    std::shared_ptr<host::DisplayConfirmation> confirmation;
+    std::uint64_t advances = 0;
+    bool gpu_retired = false;
+    const auto tick = [&] {
+        const auto result = loop.tick([&] {
+            return delivery.step(loop, [&] {
+                const auto index = advances++;
+                pixels.fill(static_cast<std::uint8_t>(index + 42));
+                return host::Frame{{index, 1, false, index == 0}, pixels};
+            }, [&](const auto& frame) {
+                const auto index = frame.commit.index;
+                expect(frame.rgba.data() == pixels.data() && frame.rgba.front() == index + 42,
+                       "Retry holds the same rendered bytes.");
+                if (confirmation) {
+                    switch (confirmation->poll(index, gpu_retired)) {
+                    case Poll::Waiting: return host::FramePresentation::Unavailable;
+                    case Poll::WrongFrame: return host::FramePresentation::Invalid;
+                    case Poll::Displayed:
+                        confirmation.reset();
+                        return host::FramePresentation::Presented;
+                    case Poll::Retry:
+                        confirmation.reset();
+                        break;
+                    }
+                }
+                submissions.push_back(index);
+                if (!frame.commit.requires_display_confirmation) return host::FramePresentation::Presented;
+                confirmation = std::make_shared<host::DisplayConfirmation>(index);
+                gpu_retired = false;
+                return host::FramePresentation::Unavailable;
+            });
+        });
+        time = loop.next_due();
+        return result;
+    };
+    expect(tick() == host::FrameTick::WaitingForFrame && submissions == std::vector<std::uint64_t>{0},
+           "Submission did not confirm the first frame's display.");
+    expect(confirmation->poll(1, true) == Poll::WrongFrame,
+           "A successor cannot enter the pending frame's confirmation.");
+    expect(tick() == host::FrameTick::WaitingForFrame && advances == 1 && submissions.size() == 1,
+           "Pending confirmation neither advances nor submits again.");
+
+    const auto skipped = confirmation;
+    std::thread([skipped] { skipped->complete(0); }).join();
+    expect(tick() == host::FrameTick::WaitingForFrame && submissions.size() == 1,
+           "A skipped drawable also needs the GPU slot to retire.");
+    gpu_retired = true;
+    expect(tick() == host::FrameTick::WaitingForFrame && advances == 1 &&
+               submissions == std::vector<std::uint64_t>({0, 0}),
+           "A skipped drawable retries the same frame and pixel slot.");
+    const auto retried = confirmation;
+    skipped->complete(1);
+    expect(retried->poll(0, true) == Poll::Waiting && skipped->poll(0, true) == Poll::Retry,
+           "Stale and duplicate callbacks cannot accept a different drawable.");
+    std::thread([retried] { retried->complete(2); }).join();
+    expect(tick() == host::FrameTick::Presented && advances == 1 && submissions.size() == 2,
+           "A positive callback accepts the original frame without resubmission.");
+    expect(tick() == host::FrameTick::Presented && advances == 2 &&
+               submissions == std::vector<std::uint64_t>({0, 0, 1}) &&
+               loop.metrics().presented_frames == 2 && loop.metrics().full_original_frames == 0,
+           "The next ordinary frame submits immediately and source metrics stay independent.");
+
+    host::DisplayConfirmation invalid_time{0};
+    invalid_time.complete(std::numeric_limits<double>::infinity());
+    expect(invalid_time.poll(0, true) == Poll::Retry, "Nonfinite times do not confirm display.");
+}
+
 void keep_unready_and_invalid_distinct() {
     Fixture waiting(false);
     waiting.session.ready = false;
@@ -175,6 +252,7 @@ int main() {
     try {
         retry_the_same_frame(false);
         retry_the_same_frame(true);
+        confirm_display_before_releasing_first_frame();
         keep_unready_and_invalid_distinct();
         release_a_cancelled_owned_frame();
         std::cout << "macos_host_frame_delivery_test: passed\n";

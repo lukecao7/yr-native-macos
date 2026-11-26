@@ -30,6 +30,8 @@ struct FrameCommit {
     std::uint64_t index;
     std::uint64_t active_objects;
     bool full_original_frame = false;
+    // Keep this 2D raster pending until the display backend confirms it.
+    bool requires_display_confirmation = false;
 };
 
 struct Percentiles {

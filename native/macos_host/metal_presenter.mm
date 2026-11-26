@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #import "metal_presenter.h"
 #import "metal_scene.h"
+#include "display_confirmation.h"
 #include "presented_trace.h"
 
 #import <CoreGraphics/CoreGraphics.h>
@@ -190,9 +191,12 @@ private:
     CoastalMetalScene* _scene;
     std::array<FrameBuffer, buffer_count> _buffers;
     std::shared_ptr<PresentationHistory> _history;
+    std::shared_ptr<host::DisplayConfirmation> _pendingDisplay;
     std::size_t _byteCount;
     std::size_t _nextBuffer;
     std::size_t _writingBuffer;
+    std::uint64_t _submittedFrames;
+    std::uint64_t _submittedOriginalFrames;
     BOOL _finished;
     std::string _presentedTracePath;
 }
@@ -259,7 +263,7 @@ private:
 - (CAMetalLayer*)layer { return _layer; }
 
 - (std::span<std::uint8_t>)writablePixels {
-    if (_finished) return {};
+    if (_finished || _pendingDisplay) return {};
 
     if (!retire_submissions(_buffers)) throw std::runtime_error("Metal frame execution failed.");
 
@@ -283,6 +287,22 @@ private:
 - (host::FramePresentation)presentFrame:(const host::Frame&)frame {
     if (_finished || !retire_submissions(_buffers)) return host::FramePresentation::Invalid;
     auto& buffer = _buffers[_writingBuffer];
+    if (_pendingDisplay) {
+        // An unavailable frame stays in FrameDelivery with the same RGBA slot.
+        switch (_pendingDisplay->poll(frame.commit.index, buffer.submission == nil)) {
+        case host::DisplayConfirmation::Poll::Waiting:
+            return host::FramePresentation::Unavailable;
+        case host::DisplayConfirmation::Poll::Displayed:
+            _pendingDisplay.reset();
+            return host::FramePresentation::Presented;
+        case host::DisplayConfirmation::Poll::Retry:
+            _pendingDisplay.reset();
+            break;
+        case host::DisplayConfirmation::Poll::WrongFrame:
+            return host::FramePresentation::Invalid;
+        }
+    }
+
     const bool scene = frame.scene != nullptr;
     if (!scene && (frame.rgba.data() != buffer.pixels.contents || frame.rgba.size() != _byteCount)) return host::FramePresentation::Invalid;
     // Finish CPU simulation/raster work before reserving a scarce display
@@ -316,24 +336,36 @@ private:
     if (@available(macOS 10.15.4, *)) {
         const auto history = _history;
         const auto commit = frame.commit;
+        if (!scene && commit.requires_display_confirmation)
+            _pendingDisplay = std::make_shared<host::DisplayConfirmation>(commit.index);
+        const auto confirmation = _pendingDisplay;
         [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
-            history->record(shown.presentedTime, scene, commit);
+            const auto presented_time = shown.presentedTime;
+            history->record(presented_time, scene, commit);
+            if (confirmation) confirmation->complete(presented_time);
         }];
     }
     [command presentDrawable:drawable];
     [command commit];
+    ++_submittedFrames;
+    if (frame.commit.full_original_frame) ++_submittedOriginalFrames;
     _history->record_work(1,started);
     buffer.submission = command;
     _nextBuffer = (_writingBuffer + 1) % buffer_count;
-    return host::FramePresentation::Presented;
+    // Poll confirmation on the next regular display pulse or fallback timer.
+    return _pendingDisplay ? host::FramePresentation::Unavailable : host::FramePresentation::Presented;
 }
 
 - (host::MetalMetrics)metrics {
-    return _history->metrics(host::take_exit_trace_path(_finished, _presentedTracePath));
+    auto metrics = _history->metrics(host::take_exit_trace_path(_finished, _presentedTracePath));
+    metrics.submitted_frames = _submittedFrames;
+    metrics.submitted_original_frames = _submittedOriginalFrames;
+    return metrics;
 }
 
 - (void)finish {
     _finished = YES;
+    _pendingDisplay.reset();
     for (auto& buffer : _buffers) {
         [buffer.submission waitUntilCompleted];
         buffer.submission = nil;

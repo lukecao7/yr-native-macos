@@ -145,7 +145,8 @@ public:
         if (!render_isometric(world_, camera_, overlay, rgba, width, height, &navigator_.workers())) {
             throw std::runtime_error("Could not render the isometric world.");
         }
-        return Frame{{frame_++, world_.entities.size(), false}, rgba};
+        const bool confirm_display = frame_ == 0 && !stress_;
+        return Frame{{frame_++, world_.entities.size(), false, confirm_display}, rgba};
     }
 
     void pointer_event(PointerEvent event) noexcept override {
