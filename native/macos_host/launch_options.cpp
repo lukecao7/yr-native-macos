@@ -2,6 +2,7 @@
 #include "macos_host/launch_options.h"
 
 #include <algorithm>
+#include <charconv>
 #include <system_error>
 
 namespace coastal::macos_host {
@@ -39,6 +40,14 @@ std::optional<LaunchOptions> parse_launch_options(
 
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         const auto argument = arguments[i];
+        if (argument == "--fullscreen" || argument == "--windowed") {
+            if (options.fullscreen.has_value()) {
+                error = "Choose one of --fullscreen or --windowed.";
+                return std::nullopt;
+            }
+            options.fullscreen = argument == "--fullscreen";
+            continue;
+        }
         if (argument.starts_with("--threads=")) {
             const auto value = argument.substr(sizeof("--threads=") - 1);
             if (threads_set || (value != "1" && value != "4" && value != "8")) {
@@ -69,11 +78,14 @@ std::optional<LaunchOptions> parse_launch_options(
         if (name == "--data-dir") path = &options.data_directory;
         if (replay == FixtureReplay::Enabled && name == "--script-file") path = &options.script_file;
         if (replay == FixtureReplay::Enabled && name == "--script-output") path = &options.script_output;
-        if (!path && name != "--skirmish-map") {
+        const bool window_size = name == "--window-size";
+        if (!path && !window_size && name != "--skirmish-map") {
             error = "Unrecognized launch argument " + std::string(argument) + ".";
             return std::nullopt;
         }
-        if (path ? !path->empty() : !options.skirmish_map.empty()) {
+        const bool repeated = window_size ? options.window_size.has_value() :
+            path ? !path->empty() : !options.skirmish_map.empty();
+        if (repeated) {
             error = "Specify " + std::string(name) + " once.";
             return std::nullopt;
         }
@@ -89,7 +101,21 @@ std::optional<LaunchOptions> parse_launch_options(
             return std::nullopt;
         }
 
-        if (path) {
+        if (window_size) {
+            const auto split = value.find('x');
+            WindowSize size{};
+            const auto dimension = [](std::string_view field, unsigned minimum, unsigned& number) {
+                const auto result = std::from_chars(field.data(), field.data() + field.size(), number);
+                return result.ec == std::errc{} && result.ptr == field.data() + field.size()
+                    && number >= minimum && number <= 16384;
+            };
+            if (split == value.npos || !dimension(value.substr(0, split), 400, size.width) ||
+                !dimension(value.substr(split + 1), 300, size.height)) {
+                error = "Use --window-size WIDTHxHEIGHT in points (at least 400x300).";
+                return std::nullopt;
+            }
+            options.window_size = size;
+        } else if (path) {
             *path = std::filesystem::path(value);
         } else {
             if (!valid_map_filename(value)) {
@@ -117,6 +143,11 @@ std::optional<LaunchOptions> parse_launch_options(
     }
     if (options.cycle_views && !options.stress) {
         error = "--cycle-views requires --stress.";
+        return std::nullopt;
+    }
+    if ((options.fullscreen.has_value() || options.window_size) &&
+        (options.stress || !options.script_file.empty())) {
+        error = "Window options require an interactive game window.";
         return std::nullopt;
     }
     return options;

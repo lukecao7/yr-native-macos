@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #import "macos_host/input_view.h"
+#include "macos_host/viewport_geometry.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 
@@ -97,6 +98,58 @@ void replay_pointer(CoastalInputView* view, RecordingSession& session) {
     expect_pointer(session.pointers[6], Phase::Enter, 0, 1024, 708, 0, 0);
     expect_pointer(session.pointers[7], Phase::Move, 0, 1022, 708, shift, 0);
     expect_pointer(session.pointers[8], Phase::Leave, 0, 1028, 710, 0, 0);
+}
+
+void verify_initial_window_sizes() {
+    const WindowContentSize natural{512, 384};
+    const WindowContentSize available{1200, 720};
+    const auto default_size = initial_window_content_size(natural, available, std::nullopt);
+    expect(default_size.width == 512 && default_size.height == 384,
+           "A fitting default window keeps its natural content size");
+    const auto small_display = initial_window_content_size(natural, {320, 350}, std::nullopt);
+    expect(small_display.width == 320 && small_display.height == 240,
+           "A default window still shrinks proportionally to fit the display");
+
+    const auto wide = initial_window_content_size(natural, available, WindowSize{16384, 300});
+    expect(wide.width == 1200 && wide.height == 300,
+           "A wide explicit window clips width and keeps the requested minimum height");
+    const auto wide_raster = fit_viewport({0, 0, wide.width, wide.height}, {1024, 768});
+    expect(wide_raster.x == 400 && wide_raster.y == 0 && wide_raster.width == 400 && wide_raster.height == 300,
+           "The raster remains centred and proportional in the wide window");
+
+    const auto tall = initial_window_content_size(natural, available, WindowSize{400, 16384});
+    expect(tall.width == 400 && tall.height == 720,
+           "A tall explicit window clips height and keeps the requested minimum width");
+    const auto tall_raster = fit_viewport({0, 0, tall.width, tall.height}, {1024, 768});
+    expect(tall_raster.x == 0 && tall_raster.y == 210 && tall_raster.width == 400 && tall_raster.height == 300,
+           "The raster remains centred and proportional in the tall window");
+}
+
+void verify_aspect_fit_and_suspension() {
+    const auto wide = fit_viewport({0, 0, 2560, 1600}, {1024, 768});
+    expect(wide.x == 214 && wide.y == 0 && wide.width == 2132 && wide.height == 1599,
+           "A wide screen centres a pixel-aligned 4:3 raster");
+    const auto tall = fit_viewport({20, 40, 1280, 1280}, {1024, 768});
+    expect(tall.x == 20 && tall.y == 200 && tall.width == 1280 && tall.height == 960,
+           "A tall window letterboxes vertically without stretching");
+
+    RecordingSession session;
+    NSView* canvas = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1200, 700)];
+    CoastalInputView* child = [[CoastalInputView alloc]
+        initWithFrame:NSMakeRect(200, 50, 800, 600) session:&session];
+    [canvas addSubview:child];
+    [child mouseMoved:mouse(NSEventTypeMouseMoved, NSMakePoint(600, 350), 0, 0)];
+    expect(session.pointers.size() == 1, "A centred game surface receives one pointer event");
+    expect_pointer(session.pointers.front(), PointerEvent::Phase::Move, 0, 512, 384, 0, 0);
+
+    [child setGameInputSuspended:YES];
+    [child mouseDown:mouse(NSEventTypeLeftMouseDown, NSMakePoint(600, 350), 0)];
+    [child mouseUp:mouse(NSEventTypeLeftMouseUp, NSMakePoint(600, 350), 0)];
+    expect(session.pointers.size() == 1, "An AppKit transition discards clicks until input resumes");
+    [child setGameInputSuspended:NO];
+    [child mouseMoved:mouse(NSEventTypeMouseMoved, NSMakePoint(400, 200), 0, 0)];
+    expect(session.pointers.size() == 2, "A completed transition admits the next current event");
+    expect_pointer(session.pointers.back(), PointerEvent::Phase::Move, 0, 256, 576, 0, 0);
 }
 
 NSEvent* wheel(CGScrollEventUnit unit, CGScrollPhase phase, CGMomentumScrollPhase momentum) {
@@ -205,6 +258,8 @@ int main() {
             expect(view != nil, "Create an offscreen input view");
             verify_tracking(view);
             replay_pointer(view, session);
+            verify_initial_window_sizes();
+            verify_aspect_fit_and_suspension();
             replay_scroll(view, session);
             replay_keys(view, session);
             std::cout << "macOS host input replay tests passed\n";
