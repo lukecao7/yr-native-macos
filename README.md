@@ -48,9 +48,13 @@ make
 
 在 Mac 上运行 `make macos-host-test` 可构建本机签名的宿主，检查启动参数、目录设置、只读 MIX 档案、帧调度、像素呈现及输入回放。目录测试使用自制资料和独立偏好验证首次选择、错误重选和无参数重启。宿主支持 `--data-dir`、`--skirmish-map` 和 `--strict-audit`。省略 `--data-dir` 时，宿主优先打开上次成功载入的资料目录。首次启动或资料读入失败时，可以在系统选择器中选目录，游戏读入成功后保存选择，取消则退出。显式参数只对当次运行生效。当前宿主的通用运行时读取下文的自制规则和地图。
 
-以下命令用自制档案启动测试窗口。左键拖动绘制选框，Shift、Ctrl、Cmd 会改变边框颜色。右键清除选框并移动色块，空格切换色块颜色，滚轮平移，Ctrl 加滚轮缩放，指针靠近窗口边缘时平移。按 Cmd+Q 或关闭窗口退出。
+以下命令用自制档案启动测试窗口。左键拖动绘制选框，Shift、Ctrl、Cmd 会改变边框颜色。右键清除选框并移动色块，空格切换色块颜色，滚轮平移，Ctrl 加滚轮缩放，指针靠近窗口边缘时平移。按 Cmd+Q 退出。
 
 通过 Finder 双击或点击 Dock 图标激活宿主后，macOS 确认它位于前台才会显示目录选择器或主窗口。以后台方式打开时，宿主等到主动激活后再检查已保存的目录。
+
+首次从 Finder 打开主窗口时默认进入 macOS 原生全屏。用 Option+Return、Cmd+F 或系统菜单栏的 View 切换，下一次无参数启动会沿用成功切换后的显示模式。命令行可以为当次测试指定 `--fullscreen` 或 `--windowed`，并用 `--window-size 960x600` 指定窗口内容大小，单位为 macOS 点。
+
+窗口和全屏共用同一套等比例视口，超出的区域留黑边。游戏窗口在前台时，系统指针越过画面边缘会被拉回。Cmd+Tab、退出和切屏过程会释放指针。
 
 设置环境变量 `COASTAL_PRESENTED_TRACE` 为新文件的绝对路径后，Metal 窗口退出时会保存 JSON。它按系统回调到达顺序保留至多 32,769 个正且有限的 drawable 呈现时间。文件也记录有效与无效回调总数。超出上限时，`truncated` 为真，`firstRetainedCallbackIndex` 给出省略的有效回调数量。已有文件会保留。
 
@@ -63,7 +67,7 @@ make macos-host-fixture
 fixture_dir=$(mktemp -d)
 python3 tests/macos_host_fixture_data.py "$fixture_dir"
 ./build/CoastalHostFixture.app/Contents/MacOS/CoastalMacHost \
-  --data-dir "$fixture_dir" --skirmish-map Fixture.map
+  --data-dir "$fixture_dir" --skirmish-map Fixture.map --windowed --window-size 640x480
 ```
 
 ### 无窗口回放自制测试会话

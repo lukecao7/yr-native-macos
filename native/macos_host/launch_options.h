@@ -13,6 +13,10 @@ namespace coastal::macos_host {
 // produces as FIFO space opens and still feeds the simulation measured time.
 enum class ProducerPacing { RuntimeInterval, WallClockBackpressure };
 
+struct WindowSize {
+    unsigned width, height; // AppKit content points.
+};
+
 struct LaunchOptions {
     std::filesystem::path data_directory;
     std::string skirmish_map;
@@ -24,6 +28,8 @@ struct LaunchOptions {
     bool cycle_views = false;
     std::filesystem::path script_file;
     std::filesystem::path script_output;
+    std::optional<bool> fullscreen;
+    std::optional<WindowSize> window_size;
     ProducerPacing producer_pacing = ProducerPacing::RuntimeInterval;
 };
 

@@ -8,5 +8,11 @@
 // Converts AppKit events to viewport pixels with a top-left origin.
 @interface CoastalInputView : NSView
 - (instancetype)initWithFrame:(NSRect)rect session:(coastal::macos_host::Session*)session;
+- (void)refreshPointerPosition;
 - (void)syncFrameCursor;
+- (void)setGameInputSuspended:(BOOL)suspended;
+- (void)setPointerConfinementEnabled:(BOOL)enabled;
+- (void)updateConstrainedPointer;
+- (BOOL)pointerConfinementActive;
+- (NSRect)pointerBoundsOnScreen;
 @end

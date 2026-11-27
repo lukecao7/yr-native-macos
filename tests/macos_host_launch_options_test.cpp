@@ -72,6 +72,28 @@ void test_launch_options() {
            attached->skirmish_map == "Board 2.YrM" && !attached->strict_audit &&
            error.empty(), "Inline values and case-insensitive map suffix");
 
+    const auto fullscreen = parse({"--fullscreen", "--window-size=960x600"}, error);
+    expect(fullscreen && fullscreen->fullscreen == true && fullscreen->window_size &&
+           fullscreen->window_size->width == 960 && fullscreen->window_size->height == 600,
+           "Full screen can specify its later restored window geometry");
+    const auto windowed = parse({"--windowed", "--window-size", "640x480"}, error);
+    expect(windowed && windowed->fullscreen == false && windowed->window_size &&
+           windowed->window_size->width == 640 && windowed->window_size->height == 480,
+           "An explicit window mode and geometry are independent of application defaults");
+    expect(!defaults->fullscreen && !defaults->window_size, "Normal launch lets AppKit apply the display preference");
+    expect_invalid({"--fullscreen", "--windowed"}, "Conflicting desktop modes fail");
+    expect_invalid({"--fullscreen", "--fullscreen"}, "Repeated desktop modes fail");
+    expect_invalid({"--window-size", "399x300"}, "Window dimensions support a visible minimum");
+    expect_invalid({"--window-size", "800x600x1"}, "Reject malformed window geometry");
+    expect_invalid({"--window-size", "18446744073709551616x600"}, "Reject overflowing window geometry");
+    expect_invalid({"--stress", "--fullscreen"}, "Stress retains its benchmark window behavior");
+    expect_invalid({"--window-size=640x480", "--window-size=800x600"}, "Repeated window dimensions fail");
+    const std::string_view replay_display[] = {"--data-dir=fixture", "--script-file=-",
+                                               "--script-output=fresh", "--windowed"};
+    expect(!parse_launch_options(replay_display, error, coastal::macos_host::FixtureReplay::Enabled) &&
+           error == "Window options require an interactive game window.",
+           "The windowless fixture replay keeps its own input options");
+
     const auto help = parse({"--help"}, error);
     expect(help && help->help && error.empty(), "Help flag");
     const auto map_only = parse({"--skirmish-map", "Demo.map"}, error);

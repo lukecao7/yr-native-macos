@@ -10,6 +10,7 @@
 #include "initial_window.h"
 #include "input_view.h"
 #include "metal_presenter.h"
+#include "viewport_geometry.h"
 
 #ifdef COASTAL_FIXTURE_REPLAY
 #include "script_replay.h"
@@ -121,7 +122,9 @@ int startup_error(const std::string& error) {
     return 2;
 }
 
-void install_quit_menu(NSApplication* application) {
+NSString* const fullscreen_preference = @"CoastalFullscreen";
+
+void install_app_menu(NSApplication* application) {
     NSMenu* bar = [[NSMenu alloc] init];
     NSMenuItem* entry = [[NSMenuItem alloc] init];
     NSMenu* menu = [[NSMenu alloc] init];
@@ -133,6 +136,16 @@ void install_quit_menu(NSApplication* application) {
     [bar addItem:entry];
     entry.submenu = menu;
     application.mainMenu = bar;
+}
+
+NSMenuItem* install_view_menu(NSApplication* application, id target, SEL toggle) {
+    NSMenu* view = [[NSMenu alloc] initWithTitle:@"View"];
+    NSMenuItem* command = [view addItemWithTitle:@"Enter Full Screen" action:toggle keyEquivalent:@"f"];
+    command.target = target;
+    NSMenuItem* entry = [[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""];
+    entry.submenu = view;
+    [application.mainMenu addItem:entry];
+    return command;
 }
 
 }  // namespace
@@ -162,6 +175,8 @@ void install_quit_menu(NSApplication* application) {
             _metal = [[CoastalMetalPresenter alloc] initWithViewport:_viewport];
         }
         if (_metal) {
+            _metal.layer.magnificationFilter = kCAFilterNearest;
+            _metal.layer.minificationFilter = kCAFilterNearest;
             const auto terrain = session->terrain_for_metal();
             if (terrain) session->scene_available([_metal enableScene:terrain] == YES);
             self.layer = _metal.layer;
@@ -233,6 +248,50 @@ void install_quit_menu(NSApplication* application) {
     CGContextSetInterpolationQuality(context, kCGInterpolationNone);
     CGContextDrawImage(context, NSRectToCGRect(self.bounds), _image);
     _drewImage = YES;
+}
+
+@end
+
+@interface CoastalGameCanvas : NSView
+- (instancetype)initWithFrame:(NSRect)rect viewport:(host::Viewport)viewport surface:(NSView*)surface;
+@end
+
+@implementation CoastalGameCanvas {
+    host::Viewport _viewport;
+    NSView* _surface;
+}
+
+- (instancetype)initWithFrame:(NSRect)rect viewport:(host::Viewport)viewport surface:(NSView*)surface {
+    if ((self = [super initWithFrame:rect])) {
+        _viewport = viewport;
+        _surface = surface;
+        [self addSubview:surface];
+    }
+    return self;
+}
+
+- (BOOL)isOpaque { return YES; }
+
+- (void)setFrameSize:(NSSize)size {
+    [super setFrameSize:size];
+    self.needsLayout = YES;
+}
+
+- (void)viewDidChangeBackingProperties {
+    [super viewDidChangeBackingProperties];
+    self.needsLayout = YES;
+}
+
+- (void)layout {
+    [super layout];
+    const auto real = [self convertRectToBacking:self.bounds];
+    const auto fitted = host::fit_viewport({NSMinX(real), NSMinY(real), NSWidth(real), NSHeight(real)}, _viewport);
+    _surface.frame = [self convertRectFromBacking:NSMakeRect(fitted.x, fitted.y, fitted.width, fitted.height)];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [NSColor.blackColor setFill];
+    NSRectFill(dirtyRect);
 }
 
 @end
@@ -348,7 +407,11 @@ std::unique_ptr<host::Session> open_launch_session(host::LaunchOptions& options,
 @interface CoastalAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 - (instancetype)initWithSession:(host::Session*)session
                       launchedAt:(host::FrameClock::time_point)launchedAt
-                    stressWindow:(BOOL)stressWindow;
+                    stressWindow:(BOOL)stressWindow
+                     windowSize:(std::optional<host::WindowSize>)windowSize
+                  initiallyFull:(BOOL)initiallyFull
+               persistWindowMode:(BOOL)persistWindowMode;
+- (void)toggleWindowMode:(id)sender;
 - (void)start;
 - (void)makeInitialWindowKeyIfActive;
 - (void)detach;
@@ -414,7 +477,11 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
     std::unique_ptr<host::FrameLoop> _loop;
     host::FrameDelivery _delivery;
     NSWindow* _window;
+    CoastalGameCanvas* _canvas;
     CoastalFrameView* _surface;
+    NSMenuItem* _fullscreenItem;
+    id _displayShortcutMonitor;
+    BOOL _stressWindow, _initiallyFull, _persistWindowMode, _changingWindowMode, _focusAllowed;
     NSTimer* _timer;
     CVDisplayLinkRef _displayLink;
     std::shared_ptr<DisplayPulseState> _displayState;
@@ -435,9 +502,15 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
 
 - (instancetype)initWithSession:(host::Session*)session
                       launchedAt:(host::FrameClock::time_point)launchedAt
-                    stressWindow:(BOOL)stressWindow {
+                    stressWindow:(BOOL)stressWindow
+                     windowSize:(std::optional<host::WindowSize>)windowSize
+                  initiallyFull:(BOOL)initiallyFull
+               persistWindowMode:(BOOL)persistWindowMode {
     if (!(self = [super init])) return nil;
     _session = session;
+    _stressWindow = stressWindow;
+    _initiallyFull = initiallyFull;
+    _persistWindowMode = persistWindowMode;
     mach_timebase_info_data_t timebase{};
     if (mach_timebase_info(&timebase) != KERN_SUCCESS || !timebase.denom) return nil;
     _hostSecondsPerTick = double(timebase.numer) / double(timebase.denom) / 1'000'000'000.0;
@@ -445,19 +518,37 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
     _hostClockOrigin = host::FrameClock::now();
     _loop = std::make_unique<host::FrameLoop>(session->frame_interval(), launchedAt);
     const auto viewport = session->viewport();
-    const CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
+    NSScreen* screen = NSScreen.mainScreen;
+    const CGFloat scale = screen.backingScaleFactor;
     if (scale <= 0) return nil;
-    const NSRect rect = NSMakeRect(0, 0, viewport.width / scale, viewport.height / scale);
+    NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+    NSSize size = NSMakeSize(viewport.width / scale, viewport.height / scale);
+    if (!stressWindow) {
+        style |= NSWindowStyleMaskResizable;
+        const auto screenBounds = NSInsetRect(screen.visibleFrame, 16, 16);
+        const auto available = [NSWindow contentRectForFrameRect:screenBounds styleMask:style];
+        const auto content = host::initial_window_content_size({size.width, size.height},
+            {NSWidth(available), NSHeight(available)}, windowSize);
+        if (content.width <= 0 || content.height <= 0) return nil;
+        size = NSMakeSize(content.width, content.height);
+    }
+    const auto rect = NSMakeRect(0, 0, size.width, size.height);
     _surface = [[CoastalFrameView alloc] initWithFrame:rect session:session];
     if (!_surface) return nil;
+    [_surface setGameInputSuspended:!stressWindow];
     _window = [[NSWindow alloc] initWithContentRect:rect
-                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
+                  styleMask:style
                   backing:NSBackingStoreBuffered defer:NO];
     _window.releasedWhenClosed = NO;
     // The engine restores games through its save files; no AppKit window archive is used.
     _window.restorable = NO;
     _window.title = NSProcessInfo.processInfo.processName;
-    _window.contentView = _surface;
+    NSView* content = _surface;
+    if (!stressWindow) {
+        _canvas = [[CoastalGameCanvas alloc] initWithFrame:rect viewport:viewport surface:_surface];
+        content = _canvas;
+    }
+    _window.contentView = content;
     _window.acceptsMouseMovedEvents = YES;
     _window.delegate = self;
     if (stressWindow) {
@@ -468,7 +559,25 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
         [_window setFrameTopLeftPoint:NSMakePoint(NSMaxX(available) - NSWidth(_window.frame) - 16,
                                                   NSMaxY(available) - 16)];
     } else {
+        _window.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+        _window.contentMinSize = NSMakeSize(400, 300);
         [_window center];
+        _fullscreenItem = install_view_menu(NSApp, self, @selector(toggleWindowMode:));
+        __weak CoastalAppDelegate* target = self;
+        _displayShortcutMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+            handler:^NSEvent*(NSEvent* event) {
+                CoastalAppDelegate* owner = target;
+                const auto flags = event.modifierFlags &
+                    (NSEventModifierFlagControl | NSEventModifierFlagOption |
+                     NSEventModifierFlagCommand | NSEventModifierFlagShift);
+                const bool alternateReturn = flags == NSEventModifierFlagOption &&
+                    (event.keyCode == 36 || event.keyCode == 76);
+                const bool commandF = flags == NSEventModifierFlagCommand &&
+                    [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"f"];
+                if (!owner || (!alternateReturn && !commandF) || ![owner ownsWindowEvent:event]) return event;
+                if (!event.isARepeat) [owner toggleWindowMode:nil];
+                return nil;
+            }];
     }
     return self;
 }
@@ -489,7 +598,14 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
         return;
     }
     _initialWindowNeedsKey = NO;
+    _focusAllowed = YES;
     [_window makeKeyAndOrderFront:nil];
+    if (_initiallyFull) {
+        _initiallyFull = NO;
+        [self toggleWindowMode:nil];
+    } else {
+        [self syncPointerConfinement];
+    }
     if (![self startDisplayLink]) {
         _timerFallback = YES;
         [self scheduleFrame];
@@ -498,8 +614,86 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
 
 - (void)applicationDidBecomeActive:(NSNotification*)notification {
     (void)notification;
+    _focusAllowed = YES;
     [self makeInitialWindowKeyIfActive];
+    [self syncPointerConfinement];
 }
+
+- (void)applicationWillResignActive:(NSNotification*)notification {
+    (void)notification;
+    _focusAllowed = NO;
+    [self suspendPointerInput];
+}
+
+- (BOOL)windowIsFullscreen {
+    return (_window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+}
+
+- (BOOL)ownsWindowEvent:(NSEvent*)event {
+    return (event.window == _window || (!event.window && _window.isKeyWindow)) && !NSApp.modalWindow;
+}
+
+- (BOOL)canToggleWindowMode {
+    return !_stressWindow && !_stopped && !_changingWindowMode && _window.isKeyWindow &&
+        NSApp.isActive && !NSApp.modalWindow;
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem*)item {
+    return item != _fullscreenItem || [self canToggleWindowMode];
+}
+
+- (void)toggleWindowMode:(id)sender {
+    (void)sender;
+    if (![self canToggleWindowMode]) return;
+    [_window toggleFullScreen:nil];
+}
+
+- (void)suspendPointerInput {
+    if (!_stressWindow) [_surface setGameInputSuspended:YES];
+    [_surface setPointerConfinementEnabled:NO];
+    _session->input_focus_lost();
+}
+
+- (void)syncPointerConfinement {
+    [_canvas layoutSubtreeIfNeeded];
+    const bool eligible = !_stressWindow && !_stopped && !_initiallyFull && !_changingWindowMode && _focusAllowed &&
+        NSApp.isActive && !NSApp.modalWindow && _window.isKeyWindow && _window.visible &&
+        !_window.miniaturized && (_window.occlusionState & NSWindowOcclusionStateVisible);
+    if (!eligible) {
+        if ([_surface pointerConfinementActive]) [self suspendPointerInput];
+        return;
+    }
+    if (![_surface pointerConfinementActive] && host::interactive_ui_action(true) == host::InitialWindowAction::Show) {
+        [_surface setPointerConfinementEnabled:YES];
+        if ([_surface pointerConfinementActive]) {
+            [_surface setGameInputSuspended:NO];
+            [_surface refreshPointerPosition];
+        }
+    }
+    [_surface updateConstrainedPointer];
+}
+
+- (void)beginWindowModeTransition {
+    _changingWindowMode = YES;
+    [self suspendPointerInput];
+}
+
+- (void)finishWindowModeTransition:(BOOL)completed {
+    _changingWindowMode = NO;
+    const BOOL full = [self windowIsFullscreen];
+    if (completed && !_stopped && _persistWindowMode)
+        [NSUserDefaults.standardUserDefaults setBool:full forKey:fullscreen_preference];
+    _fullscreenItem.title = full ? @"Exit Full Screen" : @"Enter Full Screen";
+    [_surface resetFrameElapsed];
+    [self syncPointerConfinement];
+}
+
+- (void)windowWillEnterFullScreen:(NSNotification*)note { (void)note; [self beginWindowModeTransition]; }
+- (void)windowWillExitFullScreen:(NSNotification*)note { (void)note; [self beginWindowModeTransition]; }
+- (void)windowDidEnterFullScreen:(NSNotification*)note { (void)note; [self finishWindowModeTransition:YES]; }
+- (void)windowDidExitFullScreen:(NSNotification*)note { (void)note; [self finishWindowModeTransition:YES]; }
+- (void)windowDidFailToEnterFullScreen:(NSWindow*)window { (void)window; [self finishWindowModeTransition:NO]; }
+- (void)windowDidFailToExitFullScreen:(NSWindow*)window { (void)window; [self finishWindowModeTransition:NO]; }
 
 - (BOOL)startDisplayLink {
     NSNumber* number = _window.screen.deviceDescription[@"NSScreenNumber"];
@@ -619,6 +813,7 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
 - (void)renderFrameForDisplay:(std::uint64_t)outputHostTime {
     @autoreleasepool {
         try {
+            [self syncPointerConfinement];
             const auto step = [self]() -> std::optional<host::FrameCommit> {
                 if (!_window.visible || _window.miniaturized) return std::nullopt;
                 return _delivery.step(*_loop,
@@ -669,6 +864,7 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
     if (_stopped) return;
     _stopped = YES;
     _status = status;
+    [self suspendPointerInput];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(makeInitialWindowKeyIfActive) object:nil];
     [_timer invalidate];
     _timer = nil;
@@ -684,14 +880,30 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
 
 - (void)windowDidBecomeKey:(NSNotification*)notification {
     [_window makeFirstResponder:_surface];
+    [self syncPointerConfinement];
+    [_surface refreshPointerPosition];
 }
 
-- (void)windowDidResignKey:(NSNotification*)notification { _session->input_focus_lost(); }
-
-- (void)windowDidDeminiaturize:(NSNotification*)notification { [_surface resetFrameElapsed]; }
-- (void)applicationDidUnhide:(NSNotification*)notification { [_surface resetFrameElapsed]; }
+- (void)windowDidResignKey:(NSNotification*)notification {
+    (void)notification;
+    [self suspendPointerInput];
+}
+- (void)windowDidResize:(NSNotification*)notification {
+    (void)notification;
+    [self syncPointerConfinement];
+    [_surface refreshPointerPosition];
+}
+- (void)windowWillMiniaturize:(NSNotification*)notification { (void)notification; [self suspendPointerInput]; }
+- (void)windowDidDeminiaturize:(NSNotification*)notification { (void)notification; [_surface resetFrameElapsed]; }
+- (void)applicationWillHide:(NSNotification*)notification { (void)notification; [self suspendPointerInput]; }
+- (void)applicationDidUnhide:(NSNotification*)notification { (void)notification; [_surface resetFrameElapsed]; }
 
 - (void)windowWillClose:(NSNotification*)notification { [self stopWithStatus:0]; }
+
+- (void)windowDidChangeOcclusionState:(NSNotification*)notification {
+    (void)notification;
+    [self syncPointerConfinement];
+}
 
 - (void)windowDidChangeScreen:(NSNotification*)notification {
     (void)notification;
@@ -735,10 +947,13 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
     _timer = nil;
     [self stopDisplayLink];
     _loop->stop();
+    [self suspendPointerInput];
+    if (_displayShortcutMonitor) [NSEvent removeMonitor:_displayShortcutMonitor];
     _window.delegate = nil;
     _delivery.clear();
     [_window close];
     _window.contentView = nil;
+    _canvas = nil;
     _surface = nil;
     _window = nil;
     _session = nullptr;
@@ -762,7 +977,8 @@ int main(int argc, char** argv) {
 #endif
             if (!options) return startup_error(error);
             if (options->help) {
-                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress [--cycle-views]] [--adaptive-ai]\n";
+                std::cout << "Usage: CoastalMacHost [--data-dir DIRECTORY] [--skirmish-map FILE.map] [--strict-audit] [--threads=1|4|8] [--stress [--cycle-views]] [--adaptive-ai]\n"
+                             "Display: --fullscreen or --windowed, optionally --window-size WIDTHxHEIGHT (points).\n";
 #ifdef COASTAL_FIXTURE_REPLAY
                 std::cout << "Windowless fixture replay: --script-file FILE|- --script-output NEW_DIRECTORY "
                              "with an explicit --data-dir.\n";
@@ -782,6 +998,12 @@ int main(int argc, char** argv) {
             }
 #endif
 
+            const bool persistWindowMode = argc == 1;
+            if (persistWindowMode)
+                [NSUserDefaults.standardUserDefaults registerDefaults:@{fullscreen_preference: @YES}];
+            const bool initiallyFull = options->fullscreen.value_or(
+                persistWindowMode && [NSUserDefaults.standardUserDefaults boolForKey:fullscreen_preference]);
+
             std::unique_ptr<host::Session> session;
             if (!options->data_directory.empty() || options->stress) {
                 session = open_launch_session(*options, error);
@@ -790,7 +1012,7 @@ int main(int argc, char** argv) {
 
             NSApplication* application = [NSApplication sharedApplication];
             [application setActivationPolicy:NSApplicationActivationPolicyRegular];
-            install_quit_menu(application);
+            install_app_menu(application);
             CoastalAppDelegate* delegate = nil;
             id<NSObject> stressActivity = nil;
             int status = 0;
@@ -834,7 +1056,10 @@ int main(int argc, char** argv) {
                     }
                     delegate = [[CoastalAppDelegate alloc] initWithSession:session.get()
                                                                launchedAt:launchedAt
-                                                             stressWindow:options->stress];
+                                                             stressWindow:options->stress
+                                                              windowSize:options->window_size
+                                                           initiallyFull:initiallyFull
+                                                        persistWindowMode:persistWindowMode];
                     if (delegate) {
                         application.delegate = delegate;
                         if (options->stress) {
