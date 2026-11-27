@@ -102,8 +102,32 @@ public:
         const std::lock_guard lock(mutex_);
         work_[kind][work_count_[kind]++ % presentation_samples]=elapsed;
     }
-    void record(CFTimeInterval displayed_at, bool scene, host::FrameCommit commit) {
+    void enable_drawable_trace() { drawables_.reserve(presentation_samples); }
+
+    std::uint64_t trace_drawable(std::uint64_t commit, std::uint64_t drawable_id) {
         const std::lock_guard lock(mutex_);
+        const auto ordinal = drawable_count_++;
+        const auto slot = ordinal % presentation_samples;
+        if (slot == drawables_.size()) drawables_.emplace_back();
+        drawables_[slot] = {commit, drawable_id};
+        return ordinal;
+    }
+
+    template<class Update>
+    void update_drawable(std::uint64_t ordinal, Update update) {
+        const std::lock_guard lock(mutex_);
+        if (auto* row = retained_drawable(ordinal)) update(*row);
+    }
+
+    void record(CFTimeInterval displayed_at, bool scene, host::FrameCommit commit,
+                std::optional<std::uint64_t> observation, CFTimeInterval callback_time) {
+        const std::lock_guard lock(mutex_);
+        if (observation) {
+            if (auto* row = retained_drawable(*observation)) {
+                row->presented_at = displayed_at;
+                row->presented_callback = callback_time;
+            }
+        }
         if (!clock_.record(displayed_at)) return;
         times_[(clock_.valid_count() - 1) % times_.size()] = {displayed_at, scene};
         if (scene) ++scene_count_;
@@ -121,9 +145,15 @@ public:
         host::DisplayClock clock;
         std::vector<PresentedFrame> times;
         std::array<std::vector<std::chrono::nanoseconds>,2> work;
+        std::vector<host::DrawableTraceRow> drawables;
+        std::uint64_t total_drawables = 0;
         {
             const std::lock_guard lock(mutex_);
             clock = clock_;
+            if (!trace_path.empty()) {
+                drawables = drawables_;
+                total_drawables = drawable_count_;
+            }
             result.displayed_frames = clock.valid_count();
             result.displayed_original_frames = original_count_;
             result.last_original_active_objects = last_original_objects_;
@@ -146,7 +176,8 @@ public:
             return a.time < b.time;
         });
         result.display_clock = clock.summarize_sorted(times);
-        if (export_trace && !host::write_presented_trace(trace_path.c_str(), trace_ring, result.display_clock)) {
+        if (export_trace && !host::write_presented_trace(trace_path.c_str(), trace_ring,
+                                                        result.display_clock, drawables, total_drawables)) {
             NSLog(@"Could not create presentation trace. Choose a new absolute path in an existing directory.");
         }
         if (times.size() < 2) return result;
@@ -171,8 +202,16 @@ public:
     }
 
 private:
+    // Callers hold mutex_ while reading the retained interval and the row.
+    host::DrawableTraceRow* retained_drawable(std::uint64_t ordinal) noexcept {
+        if (ordinal < drawable_count_ - drawables_.size() || ordinal >= drawable_count_) return nullptr;
+        return &drawables_[ordinal % presentation_samples];
+    }
+
     mutable std::mutex mutex_;
     std::array<PresentedFrame, presentation_samples> times_{};
+    std::vector<host::DrawableTraceRow> drawables_;
+    std::uint64_t drawable_count_ = 0;
     host::DisplayClock clock_;
     std::uint64_t original_count_ = 0;
     CFTimeInterval last_original_time_ = 0;
@@ -254,6 +293,7 @@ private:
         _history = std::make_shared<PresentationHistory>();
         if (const char* path = std::getenv("COASTAL_PRESENTED_TRACE"); path && path[0] == '/') {
             _presentedTracePath = path;
+            _history->enable_drawable_trace();
         }
         return self;
     }
@@ -333,20 +373,55 @@ private:
         [encoder endEncoding];
     }
 
+    std::optional<std::uint64_t> observation;
     if (@available(macOS 10.15.4, *)) {
         const auto history = _history;
         const auto commit = frame.commit;
+        if (!_presentedTracePath.empty()) {
+            observation = history->trace_drawable(commit.index, drawable.drawableID);
+            const auto ordinal = *observation;
+            [command addScheduledHandler:^(id<MTLCommandBuffer>) {
+                const auto entered = CACurrentMediaTime();
+                history->update_drawable(ordinal, [&](host::DrawableTraceRow& row) {
+                    row.scheduled_callback = entered;
+                });
+            }];
+            [command addCompletedHandler:^(id<MTLCommandBuffer> finished) {
+                const auto entered = CACurrentMediaTime();
+                const auto gpu_start = finished.GPUStartTime, gpu_end = finished.GPUEndTime;
+                const auto completed = finished.status == MTLCommandBufferStatusCompleted;
+                history->update_drawable(ordinal, [&](host::DrawableTraceRow& row) {
+                    row.gpu_callback = entered;
+                    row.gpu_start = gpu_start;
+                    row.gpu_end = gpu_end;
+                    row.gpu_completed = completed;
+                });
+            }];
+        }
         if (!scene && commit.requires_display_confirmation)
             _pendingDisplay = std::make_shared<host::DisplayConfirmation>(commit.index);
         const auto confirmation = _pendingDisplay;
         [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
+            const auto callback_time = observation ? CACurrentMediaTime() : 0.;
             const auto presented_time = shown.presentedTime;
-            history->record(presented_time, scene, commit);
+            history->record(presented_time, scene, commit, observation, callback_time);
             if (confirmation) confirmation->complete(presented_time);
         }];
     }
+    const auto request_begin = observation ? CACurrentMediaTime() : 0.;
     [command presentDrawable:drawable];
+    const auto request_return = observation ? CACurrentMediaTime() : 0.;
+    const auto commit_begin = observation ? CACurrentMediaTime() : 0.;
     [command commit];
+    if (observation) {
+        const auto commit_return = CACurrentMediaTime();
+        _history->update_drawable(*observation, [&](host::DrawableTraceRow& row) {
+            row.request_begin = request_begin;
+            row.request_return = request_return;
+            row.commit_begin = commit_begin;
+            row.commit_return = commit_return;
+        });
+    }
     ++_submittedFrames;
     if (frame.commit.full_original_frame) ++_submittedOriginalFrames;
     _history->record_work(1,started);

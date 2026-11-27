@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #include "macos_host/presented_trace.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -81,6 +82,30 @@ void complete_trace(NSString* path) {
             [before isEqual:[NSData dataWithContentsOfFile:path]], "An existing trace was overwritten");
 }
 
+void drawable_trace(NSString* path) {
+    host::DisplayClock display_clock;
+    require(display_clock.record(15.), "A synthetic presentation was rejected");
+    const std::array<host::PresentedFrame, 1> times{{{15., false}}};
+    const std::array<host::DrawableTraceRow, 2> drawables{{
+        {3, 22, 10., 10.5, 11., 11.5, 12., 13., 12.125, 12.75, 0., 14., true},
+        {3, 23, 14.125, 14.25, 14.375, 14.5, 14.625, 0., 0., 0., 15., 15.25, false},
+    }};
+    const auto metrics = display_clock.summarize_sorted(times);
+    require(!host::write_presented_trace(path.fileSystemRepresentation, times, metrics, drawables, 3),
+            "Accepted an inconsistent drawable count");
+    require(host::write_presented_trace(path.fileSystemRepresentation, times, metrics, drawables, 2),
+            "Could not create drawable trace");
+    NSDictionary* json = read_trace(path);
+    NSDictionary* trace = json[@"drawables"];
+    require([json[@"callbackOrderSeconds"] isEqual:@[@15]], "Drawable rows changed v1 presentation order");
+    require([trace[@"requestMode"] isEqual:@"immediate"] && [trace[@"submittedDrawables"] isEqual:@2] &&
+            [trace[@"firstRetainedSubmissionIndex"] isEqual:@0], "Wrong drawable trace header");
+    require([trace[@"rows"] isEqual:@[
+        @[@3, @22, @10, @10.5, @11, @11.5, @12, @13, @12.125, @12.75, @YES, @0, @14],
+        @[@3, @23, @14.125, @14.25, @14.375, @14.5, @14.625, @0, @0, @0, @NO, @15, @15.25],
+    ]], "Lost a retried drawable or mixed the GPU, request and display timestamps");
+}
+
 void bounded_trace(NSString* path) {
     constexpr std::size_t capacity = 32'769;
     constexpr auto valid = capacity*2 + 5;
@@ -121,6 +146,7 @@ int main() {
             optional_exit_only([dir stringByAppendingPathComponent:@"empty.json"]);
             complete_trace([dir stringByAppendingPathComponent:@"short.json"]);
             bounded_trace([dir stringByAppendingPathComponent:@"bounded.json"]);
+            drawable_trace([dir stringByAppendingPathComponent:@"drawables.json"]);
             std::cout << "MAC_HOST_PRESENTED_TRACE_PASS capacity=32769 callbacks=65543 ordered=true"
                          " truncated=true exitOnly=true exclusiveCreate=true\n";
         } catch (const std::exception& error) {

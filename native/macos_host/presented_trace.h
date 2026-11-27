@@ -15,9 +15,21 @@ inline std::string take_exit_trace_path(bool finished, std::string& requested) {
     return finished ? std::exchange(requested, std::string{}) : std::string{};
 }
 
-// The ring and counters must come from one locked history snapshot. Entries
+struct DrawableTraceRow {
+    std::uint64_t commit = 0, drawable_id = 0;
+    double request_begin = 0, request_return = 0;
+    double commit_begin = 0, commit_return = 0;
+    double scheduled_callback = 0, gpu_callback = 0;
+    double gpu_start = 0, gpu_end = 0;
+    double presented_at = 0, presented_callback = 0;
+    bool gpu_completed = false;
+};
+
+// The rings and counters must come from one locked history snapshot. Entries
 // occupy physical ring slots, with the most recent at (valid_callbacks-1)%cap.
 bool write_presented_trace(const char* new_absolute_path, std::span<const PresentedFrame> ring,
-                           const DisplayClockMetrics& metrics);
+                           const DisplayClockMetrics& metrics,
+                           std::span<const DrawableTraceRow> drawables = {},
+                           std::uint64_t total_drawables = 0);
 
 } // namespace coastal::macos_host
