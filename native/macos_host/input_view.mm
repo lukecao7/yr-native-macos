@@ -2,6 +2,7 @@
 #import "input_view.h"
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace host = coastal::macos_host;
 
@@ -30,6 +31,21 @@ std::uint32_t button_number(NSEvent* event) {
 constexpr NSEventMask pointer_motion = NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged |
     NSEventMaskRightMouseDragged | NSEventMaskOtherMouseDragged;
 
+struct EdgeWarp {
+    NSRect bounds;
+    host::Viewport viewport;
+    NSPoint target;
+    NSPoint inward;
+    NSTimeInterval last_position_timestamp;
+    bool awaiting_inward_move = true;
+
+    bool moved_inward(NSPoint position) const noexcept {
+        // Allow for the system cursor's point quantization at the warp target.
+        return (position.x - target.x) * inward.x > 1 ||
+               (position.y - target.y) * inward.y > 1;
+    }
+};
+
 NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
     // Keep the system hotspot clear of title bars, other displays and the
     // system edge. Even at the minimum window size this sits in the scroll band.
@@ -53,7 +69,9 @@ NSPoint quartz_point(NSPoint point) noexcept {
     BOOL _softwareCursor;
     BOOL _gameInputSuspended;
     BOOL _confinementActive;
+    BOOL _scrollGestureActive;
     std::uint64_t _pressedButtons;
+    std::optional<EdgeWarp> _edgeWarp;
     id _localPointerMonitor;
     id _globalPointerMonitor;
 }
@@ -76,8 +94,19 @@ NSPoint quartz_point(NSPoint point) noexcept {
 - (void)setGameInputSuspended:(BOOL)suspended {
     if (_gameInputSuspended == suspended) return;
     _gameInputSuspended = suspended;
+    _edgeWarp.reset();
+    _scrollGestureActive = NO;
     if (suspended) _pressedButtons = 0;
     [self syncFrameCursor];
+}
+
+- (void)viewWillMoveToWindow:(NSWindow*)newWindow {
+    if (newWindow != self.window) {
+        _edgeWarp.reset();
+        _scrollGestureActive = NO;
+        _pressedButtons = 0;
+    }
+    [super viewWillMoveToWindow:newWindow];
 }
 
 - (BOOL)pointerConfinementActive { return _confinementActive; }
@@ -86,6 +115,10 @@ NSPoint quartz_point(NSPoint point) noexcept {
     if (!self.window) return NSZeroRect;
     return [self.window convertRectToScreen:[self convertRect:self.bounds toView:nil]];
 }
+
+- (NSPoint)systemPointerLocation { return NSEvent.mouseLocation; }
+- (BOOL)systemPointerButtonDown { return NSEvent.pressedMouseButtons != 0; }
+- (NSTimeInterval)pointerUptime { return NSProcessInfo.processInfo.systemUptime; }
 
 - (BOOL)moveSystemPointerTo:(NSPoint)point {
     if (!self.window.screen) return NO;
@@ -100,17 +133,19 @@ NSPoint quartz_point(NSPoint point) noexcept {
 - (void)setPointerConfinementEnabled:(BOOL)enabled {
     if (!enabled) {
         _confinementActive = NO;
+        _edgeWarp.reset();
+        _scrollGestureActive = NO;
         if (_localPointerMonitor) [NSEvent removeMonitor:_localPointerMonitor];
         if (_globalPointerMonitor) [NSEvent removeMonitor:_globalPointerMonitor];
         _localPointerMonitor = nil;
         _globalPointerMonitor = nil;
         return;
     }
-    if (_confinementActive || NSEvent.pressedMouseButtons) return;
+    if (_confinementActive || [self systemPointerButtonDown]) return;
     const auto bounds = [self pointerBoundsOnScreen];
     if (NSIsEmptyRect(bounds)) return;
     _confinementActive = YES;
-    const auto pointer = NSEvent.mouseLocation;
+    const auto pointer = [self systemPointerLocation];
     if (!NSPointInRect(pointer, bounds))
         [self moveSystemPointerTo:NSMakePoint(NSMidX(bounds), NSMidY(bounds))];
 
@@ -123,12 +158,42 @@ NSPoint quartz_point(NSPoint point) noexcept {
             return owner ? [owner handleLocalPointerMotion:event] : event;
         }];
     _globalPointerMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:pointer_motion
-        handler:^(NSEvent*) { [view updateConstrainedPointer]; }];
+        handler:^(NSEvent*) { [view sampleConstrainedPointerRecovering:NO]; }];
+}
+
+- (BOOL)windowOwnsConstrainedPointer {
+    return NSApp.isActive && !NSApp.modalWindow && self.window.isKeyWindow;
 }
 
 - (BOOL)canConstrainPointer {
-    return _confinementActive && !_gameInputSuspended && NSApp.isActive &&
-        !NSApp.modalWindow && self.window.isKeyWindow;
+    return _confinementActive && !_gameInputSuspended && [self windowOwnsConstrainedPointer];
+}
+
+- (BOOL)canRecoverConstrainedPointer {
+    return [self canConstrainPointer] && !_pressedButtons && !_scrollGestureActive &&
+           ![self systemPointerButtonDown];
+}
+
+- (void)validateEdgeWarpInBounds:(NSRect)bounds {
+    if (!_edgeWarp) return;
+    const auto viewport = _session->viewport();
+    if (NSIsEmptyRect(bounds) || ![self canRecoverConstrainedPointer] ||
+        !NSEqualRects(bounds, _edgeWarp->bounds) ||
+        viewport.width != _edgeWarp->viewport.width || viewport.height != _edgeWarp->viewport.height)
+        _edgeWarp.reset();
+}
+
+- (BOOL)warpPointerFrom:(NSPoint)origin to:(NSPoint)target inside:(NSRect)bounds {
+    _edgeWarp.reset();
+    const auto timestamp = [self pointerUptime];
+    if (![self moveSystemPointerTo:target]) return NO;
+    if ([self canRecoverConstrainedPointer]) {
+        const NSPoint inward = NSMakePoint(
+            origin.x < NSMinX(bounds) ? 1 : origin.x >= NSMaxX(bounds) ? -1 : 0,
+            origin.y < NSMinY(bounds) ? 1 : origin.y >= NSMaxY(bounds) ? -1 : 0);
+        _edgeWarp = EdgeWarp{bounds, _session->viewport(), target, inward, timestamp};
+    }
+    return YES;
 }
 
 - (NSEvent*)handleLocalPointerMotion:(NSEvent*)event {
@@ -136,9 +201,17 @@ NSPoint quartz_point(NSPoint point) noexcept {
     if (event.window && event.window != self.window) return event;
     const auto bounds = [self pointerBoundsOnScreen];
     if (NSIsEmptyRect(bounds)) return event;
-    const auto systemPoint = NSEvent.mouseLocation;
-    if (!NSPointInRect(systemPoint, bounds))
-        [self moveSystemPointerTo:clamp_inside(systemPoint, bounds)];
+    [self validateEdgeWarpInBounds:bounds];
+    const auto systemPoint = [self systemPointerLocation];
+    if (!NSPointInRect(systemPoint, bounds)) {
+        const auto target = clamp_inside(systemPoint, bounds);
+        if ([self warpPointerFrom:systemPoint to:target inside:bounds] &&
+            _edgeWarp && event.type == NSEventTypeMouseMoved) {
+            [self sendPointerAtScreenPosition:target phase:host::PointerEvent::Phase::Move
+                                   modifiers:event.modifierFlags];
+            return nil;
+        }
+    }
     if (event.type != NSEventTypeMouseMoved) return event;
 
     const auto location = [self eventLocationInWindow:event];
@@ -149,16 +222,36 @@ NSPoint quartz_point(NSPoint point) noexcept {
 }
 
 - (void)updateConstrainedPointer {
-    if (![self canConstrainPointer]) return;
+    [self sampleConstrainedPointerRecovering:YES];
+}
+
+- (void)sampleConstrainedPointerRecovering:(BOOL)recover {
+    if (![self canConstrainPointer]) {
+        _edgeWarp.reset();
+        return;
+    }
     const auto bounds = [self pointerBoundsOnScreen];
+    [self validateEdgeWarpInBounds:bounds];
     if (NSIsEmptyRect(bounds)) return;
-    const auto pointer = NSEvent.mouseLocation;
-    if (NSPointInRect(pointer, bounds)) return;
+    // The event timestamp and uptime share AppKit's time since system startup.
+    const bool awaitingInwardMove = recover && _edgeWarp && _edgeWarp->awaiting_inward_move;
+    const auto sampledAt = awaitingInwardMove ? [self pointerUptime] : 0;
+    const auto pointer = [self systemPointerLocation];
+    if (NSPointInRect(pointer, bounds)) {
+        if (awaitingInwardMove && _edgeWarp->moved_inward(pointer)) {
+            _edgeWarp->last_position_timestamp = sampledAt;
+            _edgeWarp->awaiting_inward_move = false;
+            [self sendPointerAtScreenPosition:pointer phase:host::PointerEvent::Phase::Move
+                                    modifiers:NSEvent.modifierFlags];
+        }
+        return;
+    }
     const auto next = clamp_inside(pointer, bounds);
-    if (![self moveSystemPointerTo:next]) return;
+    if (![self warpPointerFrom:pointer to:next inside:bounds]) return;
     // A Quartz warp does not dispatch a mouse event. Publish the edge explicitly
     // when the original movement went outside the event stream of our window.
-    [self sendPointerAtScreenPosition:next];
+    [self sendPointerAtScreenPosition:next phase:host::PointerEvent::Phase::Enter
+                            modifiers:NSEvent.modifierFlags];
 }
 
 - (void)syncFrameCursor {
@@ -228,33 +321,61 @@ NSPoint quartz_point(NSPoint point) noexcept {
     return [self viewportPointForLocation:location point:position];
 }
 
-- (void)sendPointerAtScreenPosition:(NSPoint)screen {
+- (void)sendPointerAtScreenPosition:(NSPoint)screen phase:(host::PointerEvent::Phase)phase
+                         modifiers:(NSEventModifierFlags)modifiers {
     NSPoint point;
     if (![self viewportPointForLocation:[self.window convertPointFromScreen:screen] point:&point]) return;
     const auto viewport = _session->viewport();
     if (point.x >= 0 && point.x < viewport.width && point.y >= 0 && point.y < viewport.height)
-        _session->pointer_event({host::PointerEvent::Phase::Enter, 0, point.x, point.y, NSEvent.modifierFlags});
+        _session->pointer_event({phase, 0, point.x, point.y, modifiers});
 }
 
 - (void)refreshPointerPosition {
     if (_gameInputSuspended || !self.window.isKeyWindow || (!_confinementActive && !_session->has_software_cursor())) return;
-    const auto position = NSEvent.mouseLocation;
+    const auto position = [self systemPointerLocation];
     const auto bounds = [self pointerBoundsOnScreen];
     if (NSIsEmptyRect(bounds)) return;
     const auto target = _confinementActive && !NSPointInRect(position, bounds)
         ? clamp_inside(position, bounds) : position;
-    [self sendPointerAtScreenPosition:target];
+    [self sendPointerAtScreenPosition:target phase:host::PointerEvent::Phase::Enter
+                            modifiers:NSEvent.modifierFlags];
+}
+
+- (BOOL)acceptHoverEventDuringEdgeWarp:(NSEvent*)event phase:(host::PointerEvent::Phase)phase {
+    if (!_edgeWarp) return YES;
+    [self validateEdgeWarpInBounds:[self pointerBoundsOnScreen]];
+    if (!_edgeWarp) return YES;
+    if ((event.window && event.window != self.window) ||
+        event.timestamp <= _edgeWarp->last_position_timestamp) return NO;
+
+    if (phase == host::PointerEvent::Phase::Enter || _edgeWarp->awaiting_inward_move) {
+        const auto screen = [self.window convertPointToScreen:[self eventLocationInWindow:event]];
+        if (phase == host::PointerEvent::Phase::Enter) {
+            // AppKit can create a tracking event late, with an older location.
+            const auto current = [self systemPointerLocation];
+            if (!NSPointInRect(current, _edgeWarp->bounds) ||
+                std::abs(screen.x - current.x) > 1 || std::abs(screen.y - current.y) > 1) return NO;
+        }
+        if (NSPointInRect(screen, _edgeWarp->bounds) && _edgeWarp->moved_inward(screen))
+            _edgeWarp->awaiting_inward_move = false;
+    }
+    _edgeWarp->last_position_timestamp = event.timestamp;
+    return YES;
 }
 
 - (void)forwardPointer:(NSEvent*)event phase:(host::PointerEvent::Phase)phase {
     if (_gameInputSuspended) return;
     using Phase = host::PointerEvent::Phase;
     if (_confinementActive && phase == Phase::Leave) return;
+    const bool mouseButton = phase == Phase::Down || phase == Phase::Drag || phase == Phase::Up;
+    if (mouseButton) _edgeWarp.reset();
+    if ((phase == Phase::Move || phase == Phase::Enter) &&
+        ![self acceptHoverEventDuringEdgeWarp:event phase:phase]) return;
     NSPoint point;
     if (![self viewportPointForEvent:event point:&point]) return;
 
     host::PointerEvent input{phase, 0, point.x, point.y, event.modifierFlags};
-    if (phase == Phase::Down || phase == Phase::Drag || phase == Phase::Up) {
+    if (mouseButton) {
         input.button = button_number(event);
         if (input.button >= 64) return;
         const auto button = std::uint64_t{1} << input.button;
@@ -284,6 +405,9 @@ NSPoint quartz_point(NSPoint point) noexcept {
 
 - (void)scrollWheel:(NSEvent*)event {
     if (_gameInputSuspended) return;
+    constexpr auto active = NSEventPhaseMayBegin | NSEventPhaseBegan | NSEventPhaseChanged | NSEventPhaseStationary;
+    _edgeWarp.reset();
+    _scrollGestureActive = ((event.phase | event.momentumPhase) & active) != 0;
     NSPoint point;
     if (![self viewportPointForEvent:event point:&point]) return;
 
