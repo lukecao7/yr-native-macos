@@ -192,7 +192,9 @@ Observation observe(const World& world, Side side) {
             for (int x = left; x <= right; ++x) {
                 const int index = y * map.width + x;
                 const Tile& tile = map.tiles[index];
-                observation.visible[index] = {true, tile.terrain, tile.resource};
+                const auto terrain = tile.effective_terrain();
+                const auto resource = terrain == Terrain::Deposit ? tile.resource : std::uint16_t{0};
+                observation.visible[index] = {true, terrain, resource};
             }
         }
     }

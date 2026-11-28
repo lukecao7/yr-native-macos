@@ -315,7 +315,7 @@ void check_world(const World& world) {
     }
     for (const auto& tile : map.tiles) {
         if (tile.terrain > Terrain::Deposit ||
-            (tile.terrain != Terrain::Deposit && tile.resource != 0)) {
+            (!tile.supports_deposit() && tile.resource != 0)) {
             throw std::invalid_argument("Invalid terrain or resource in save.");
         }
     }

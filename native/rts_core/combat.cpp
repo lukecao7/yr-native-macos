@@ -605,7 +605,7 @@ void Navigator::prepare(const World& world) {
     const int flow_height = std::max(minimum_flow_extent, map.height);
     std::vector<unsigned char> blocked(std::size_t(flow_width) * flow_height, 1);
     const auto impassable = [](const Tile& tile) {
-        return tile.terrain == Terrain::Water || tile.terrain == Terrain::Rock;
+        return !tile.walkable();
     };
     if (map.width == flow_width) {
         std::transform(map.tiles.begin(), map.tiles.end(), blocked.begin(), impassable);
