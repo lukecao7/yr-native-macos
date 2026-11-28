@@ -11,6 +11,31 @@
 
 using namespace coastal::macos_host;
 
+@interface CoastalInputView (EdgeRecoveryReplay)
+- (NSEvent*)handleLocalPointerMotion:(NSEvent*)event;
+- (void)sampleConstrainedPointerRecovering:(BOOL)recover;
+@end
+
+@interface ReplayedPointerView : CoastalInputView
+@property NSPoint hotspot;
+@property NSTimeInterval uptime;
+@property BOOL ownsPointer;
+@property BOOL buttonHeld;
+@property BOOL warpFails;
+@end
+
+@implementation ReplayedPointerView
+- (NSPoint)systemPointerLocation { return self.hotspot; }
+- (NSTimeInterval)pointerUptime { return self.uptime; }
+- (BOOL)windowOwnsConstrainedPointer { return self.ownsPointer; }
+- (BOOL)systemPointerButtonDown { return self.buttonHeld; }
+- (BOOL)moveSystemPointerTo:(NSPoint)point {
+    if (self.warpFails) return NO;
+    self.hotspot = point;
+    return YES;
+}
+@end
+
 namespace {
 
 void expect(bool condition, const char* description) {
@@ -28,7 +53,7 @@ struct RecordedKey {
 
 class RecordingSession final : public Session {
 public:
-    Viewport viewport() const noexcept override { return {1024, 768}; }
+    Viewport viewport() const noexcept override { return viewport_size; }
     FrameClock::duration frame_interval() const noexcept override {
         return std::chrono::milliseconds(16);
     }
@@ -41,22 +66,23 @@ public:
                         std::string(event.characters), std::string(event.characters_ignoring_modifiers)});
     }
 
+    Viewport viewport_size{1024, 768};
     std::vector<PointerEvent> pointers;
     std::vector<ScrollEvent> scrolls;
     std::vector<RecordedKey> keys;
 };
 
 NSEvent* mouse(NSEventType type, NSPoint point, NSEventModifierFlags modifiers,
-               NSInteger click_count = 1) {
+               NSInteger click_count = 1, NSTimeInterval timestamp = 1) {
     NSEvent* event = [NSEvent mouseEventWithType:type location:point modifierFlags:modifiers
-        timestamp:1 windowNumber:0 context:nil eventNumber:1 clickCount:click_count pressure:1];
+        timestamp:timestamp windowNumber:0 context:nil eventNumber:1 clickCount:click_count pressure:1];
     expect(event != nil, "Create a local pointer event");
     return event;
 }
 
-NSEvent* crossing(NSEventType type, NSPoint point) {
+NSEvent* crossing(NSEventType type, NSPoint point, NSTimeInterval timestamp = 1) {
     NSEvent* event = [NSEvent enterExitEventWithType:type location:point modifierFlags:0
-        timestamp:1 windowNumber:0 context:nil eventNumber:1 trackingNumber:1 userData:nullptr];
+        timestamp:timestamp windowNumber:0 context:nil eventNumber:1 trackingNumber:1 userData:nullptr];
     expect(event != nil, "Create a local pointer tracking event");
     return event;
 }
@@ -229,6 +255,161 @@ void replay_scroll(CoastalInputView* view, RecordingSession& session) {
            "Exercise both coarse and precise two-axis scrolling");
 }
 
+void verify_confined_edge_recovery() {
+    using Phase = PointerEvent::Phase;
+    RecordingSession session;
+    NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(70, 130, 512, 384)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:YES];
+    ReplayedPointerView* view = [[ReplayedPointerView alloc]
+        initWithFrame:NSMakeRect(0, 0, 512, 384) session:&session];
+    [window.contentView addSubview:view];
+    const auto screen = [window](CGFloat x, CGFloat y) {
+        return [window convertPointToScreen:NSMakePoint(x, y)];
+    };
+    const auto motion = [&](CGFloat x, CGFloat y, NSTimeInterval timestamp) {
+        return mouse(NSEventTypeMouseMoved, screen(x, y), 0, 0, timestamp);
+    };
+    const auto enter = [&](CGFloat x, CGFloat y, NSTimeInterval timestamp) {
+        return crossing(NSEventTypeMouseEntered, screen(x, y), timestamp);
+    };
+    view.ownsPointer = YES;
+    view.hotspot = screen(30, 100);
+    [view setPointerConfinementEnabled:YES];
+
+    view.uptime = 10.01;
+    view.hotspot = screen(-5, 100);
+    expect([view handleLocalPointerMotion:motion(-5, 100, 10)] == nil &&
+               session.pointers.size() == 1,
+           "A successful local warp publishes the edge once");
+    expect_pointer(session.pointers.back(), Phase::Move, 0, 4, 568, 0, 0);
+
+    view.uptime = 10.2;
+    view.hotspot = screen(3, 101);
+    [view updateConstrainedPointer];
+    expect(session.pointers.size() == 1, "Warp rounding and tangential movement do not recover the cursor");
+    view.uptime = 10.21;
+    view.hotspot = screen(14, 101);
+    [view sampleConstrainedPointerRecovering:NO];
+    expect(session.pointers.size() == 1, "The global monitor does not publish a recovery move");
+    [view updateConstrainedPointer];
+    [view updateConstrainedPointer];
+    expect(session.pointers.size() == 2, "The first frame sample of inward movement is delivered once after a dwell");
+    const auto& recovered = session.pointers.back();
+    expect(recovered.phase == Phase::Move && recovered.x == 28 && recovered.y == 566,
+           "The sample publishes the absolute hotspot in viewport coordinates");
+
+    [view mouseMoved:motion(-5, 100, 10.009)];
+    [view mouseMoved:motion(14, 101, 10.205)];
+    [view mouseEntered:enter(2, 100, 10.007)];
+    [view mouseEntered:enter(2, 100, 10.25)];
+    expect(session.pointers.size() == 2, "Late moves and tracking enters cannot restore the old edge");
+    view.hotspot = screen(16, 102);
+    [view mouseMoved:motion(16, 102, 10.24)];
+    [view mouseEntered:enter(16, 102, 10.26)];
+    expect(session.pointers.size() == 4, "Current moves and matching tracking enters resume normally");
+    expect_pointer(session.pointers.back(), Phase::Enter, 0, 32, 564, 0, 0);
+
+    const auto warp = [&](CGFloat x, CGFloat y) {
+        view.hotspot = screen(x, y);
+        view.uptime += 1;
+        const auto before = session.pointers.size();
+        [view updateConstrainedPointer];
+        expect(session.pointers.size() == before + 1 &&
+                   session.pointers.back().phase == Phase::Enter,
+               "The frame warp still reports the confined edge");
+    };
+    warp(515, 100);
+    view.hotspot = screen(500, 100);
+    view.uptime += .01;
+    [view mouseMoved:motion(500, 100, view.uptime)];
+    const auto delivered = session.pointers.size();
+    [view updateConstrainedPointer];
+    expect(session.pointers.size() == delivered, "A native inward move wins over the frame sample");
+    expect_pointer(session.pointers.back(), Phase::Move, 0, 1000, 568, 0, 0);
+
+    const auto no_recovery = [&] {
+        const auto before = session.pointers.size();
+        view.hotspot = screen(16, 100);
+        [view updateConstrainedPointer];
+        expect(session.pointers.size() == before, "An interrupted warp cannot publish a later inward sample");
+    };
+    warp(-5, 100);
+    view.ownsPointer = NO;
+    [view updateConstrainedPointer];
+    view.ownsPointer = YES;
+    no_recovery();
+    warp(-5, 100);
+    [view setGameInputSuspended:YES];
+    [view setGameInputSuspended:NO];
+    no_recovery();
+    warp(-5, 100);
+    [view setPointerConfinementEnabled:NO];
+    [view setPointerConfinementEnabled:YES];
+    no_recovery();
+    warp(-5, 100);
+    [view setFrameOrigin:NSMakePoint(4, 0)];
+    no_recovery();
+    [view setFrameOrigin:NSZeroPoint];
+    warp(-5, 100);
+    session.viewport_size.width = 800;
+    no_recovery();
+    session.viewport_size.width = 1024;
+    warp(-5, 100);
+    view.buttonHeld = YES;
+    no_recovery();
+    view.buttonHeld = NO;
+    no_recovery();
+    warp(-5, 100);
+    const auto beforeClick = session.pointers.size();
+    [view mouseDown:mouse(NSEventTypeLeftMouseDown, screen(12, 100), 0)];
+    [view mouseDragged:mouse(NSEventTypeLeftMouseDragged, screen(13, 100), 0)];
+    [view mouseUp:mouse(NSEventTypeLeftMouseUp, screen(14, 100), 0)];
+    expect(session.pointers.size() == beforeClick + 3, "Click and drag delivery survives recovery cancellation");
+    no_recovery();
+    warp(-5, 100);
+    [view scrollWheel:wheel(kCGScrollEventUnitPixel, kCGScrollPhaseChanged, kCGMomentumScrollPhaseNone)];
+    expect(session.scrolls.size() == 1, "Scrolling still reaches the session");
+    no_recovery();
+    warp(-5, 100);
+    no_recovery();
+    [view scrollWheel:wheel(kCGScrollEventUnitPixel, kCGScrollPhaseEnded, kCGMomentumScrollPhaseNone)];
+    warp(-5, 100);
+    const auto afterScroll = session.pointers.size();
+    view.hotspot = screen(16, 100);
+    view.uptime += .01;
+    [view updateConstrainedPointer];
+    expect(session.pointers.size() == afterScroll + 1, "A later warp can recover after the gesture ends");
+
+    view.warpFails = YES;
+    view.hotspot = screen(-5, 100);
+    const auto beforeFailure = session.pointers.size();
+    [view updateConstrainedPointer];
+    expect(session.pointers.size() == beforeFailure, "A failed frame warp publishes no edge");
+    no_recovery();
+    view.warpFails = NO;
+
+    warp(510, 390);
+    const auto beforeVertical = session.pointers.size();
+    view.hotspot = screen(495, 382);
+    [view updateConstrainedPointer];
+    expect(session.pointers.size() == beforeVertical, "Only the crossed axis counts as inward");
+    view.hotspot = screen(490, 369);
+    view.uptime += .01;
+    [view updateConstrainedPointer];
+    expect(session.pointers.size() == beforeVertical + 1 &&
+               session.pointers.back().x == 980 && session.pointers.back().y == 30,
+           "The first inward move after a vertical warp also recovers");
+
+    warp(-5, 100);
+    NSWindow* replacement = [[NSWindow alloc] initWithContentRect:window.frame
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:YES];
+    [replacement.contentView addSubview:view];
+    expect(view.window == replacement, "Move the input view to a different window with the same geometry");
+    no_recovery();
+
+    [view setPointerConfinementEnabled:NO];
+}
+
 NSEvent* key(NSEventType type, NSString* text, NSString* unmodified,
              NSEventModifierFlags modifiers, BOOL repeat) {
     NSEvent* event = [NSEvent keyEventWithType:type location:NSZeroPoint modifierFlags:modifiers
@@ -302,6 +483,7 @@ int main() {
             verify_initial_window_sizes();
             verify_aspect_fit_and_suspension();
             verify_windowless_pointer_location();
+            verify_confined_edge_recovery();
             replay_scroll(view, session);
             replay_keys(view, session);
             std::cout << "macOS host input replay tests passed\n";
