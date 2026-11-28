@@ -142,14 +142,53 @@ void verify_aspect_fit_and_suspension() {
     expect(session.pointers.size() == 1, "A centred game surface receives one pointer event");
     expect_pointer(session.pointers.front(), PointerEvent::Phase::Move, 0, 512, 384, 0, 0);
 
+    [child mouseDown:mouse(NSEventTypeLeftMouseDown, NSMakePoint(600, 350), NSEventModifierFlagControl)];
+    expect_pointer(session.pointers.back(), PointerEvent::Phase::Down, 0, 512, 384, NSEventModifierFlagControl, 1);
     [child setGameInputSuspended:YES];
     [child mouseDown:mouse(NSEventTypeLeftMouseDown, NSMakePoint(600, 350), 0)];
     [child mouseUp:mouse(NSEventTypeLeftMouseUp, NSMakePoint(600, 350), 0)];
-    expect(session.pointers.size() == 1, "An AppKit transition discards clicks until input resumes");
+    expect(session.pointers.size() == 2, "An AppKit transition discards clicks until input resumes");
     [child setGameInputSuspended:NO];
+    [child mouseDragged:mouse(NSEventTypeLeftMouseDragged, NSMakePoint(601, 350), 0)];
+    [child mouseUp:mouse(NSEventTypeLeftMouseUp, NSMakePoint(601, 350), 0)];
+    expect(session.pointers.size() == 2, "A drag and release from a previous focus do not reach the session");
     [child mouseMoved:mouse(NSEventTypeMouseMoved, NSMakePoint(400, 200), 0, 0)];
-    expect(session.pointers.size() == 2, "A completed transition admits the next current event");
+    expect(session.pointers.size() == 3, "A completed transition admits the next current event");
     expect_pointer(session.pointers.back(), PointerEvent::Phase::Move, 0, 256, 576, 0, 0);
+}
+
+void replay_auxiliary_button(CoastalInputView* view, RecordingSession& session) {
+    const auto mouse_event = [](CGEventType type) {
+        const auto event = CGEventCreateMouseEvent(nullptr, type, CGPointZero, kCGMouseButtonCenter);
+        expect(event != nullptr, "Create an auxiliary mouse event");
+        auto* wrapped = [NSEvent eventWithCGEvent:event];
+        CFRelease(event);
+        expect(wrapped != nil, "Wrap the auxiliary mouse event");
+        return wrapped;
+    };
+    const auto first = session.pointers.size();
+    [view otherMouseDown:mouse_event(kCGEventOtherMouseDown)];
+    [view otherMouseDragged:mouse_event(kCGEventOtherMouseDragged)];
+    [view otherMouseUp:mouse_event(kCGEventOtherMouseUp)];
+    expect(session.pointers.size() == first + 3, "Forward the auxiliary button gesture once");
+    for (auto index = first; index < session.pointers.size(); ++index)
+        expect(session.pointers[index].button == 2, "Keep the auxiliary and secondary buttons distinct");
+}
+
+void verify_windowless_pointer_location() {
+    [NSApplication sharedApplication];
+    RecordingSession session;
+    NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(70, 130, 1000, 700)
+        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:YES];
+    CoastalInputView* view = [[CoastalInputView alloc] initWithFrame:NSMakeRect(100, 50, 800, 600)
+        session:&session];
+    [window.contentView addSubview:view];
+    const auto position = [window convertPointToScreen:NSMakePoint(500, 350)];
+    auto* event = mouse(NSEventTypeMouseMoved, position, NSEventModifierFlagShift, 0);
+    expect(event.window == nil && !window.visible, "Keep the desktop-coordinate replay offscreen");
+    [view mouseMoved:event];
+    expect(session.pointers.size() == 1, "Forward the windowless event once");
+    expect_pointer(session.pointers.front(), PointerEvent::Phase::Move, 0, 512, 384, NSEventModifierFlagShift, 0);
 }
 
 NSEvent* wheel(CGScrollEventUnit unit, CGScrollPhase phase, CGMomentumScrollPhase momentum) {
@@ -258,8 +297,10 @@ int main() {
             expect(view != nil, "Create an offscreen input view");
             verify_tracking(view);
             replay_pointer(view, session);
+            replay_auxiliary_button(view, session);
             verify_initial_window_sizes();
             verify_aspect_fit_and_suspension();
+            verify_windowless_pointer_location();
             replay_scroll(view, session);
             replay_keys(view, session);
             std::cout << "macOS host input replay tests passed\n";

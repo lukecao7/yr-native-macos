@@ -38,6 +38,13 @@ NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
                        std::clamp(point.y, NSMinY(rect) + pad, NSMaxY(rect) - pad));
 }
 
+NSPoint quartz_point(NSPoint point) noexcept {
+    // AppKit's primary screen starts at its lower-left corner. Quartz uses
+    // the upper-left corner of that same screen, including across displays.
+    const auto primary = NSScreen.screens.firstObject.frame;
+    return NSMakePoint(point.x - NSMinX(primary), NSMaxY(primary) - point.y);
+}
+
 }  // namespace
 
 @implementation CoastalInputView {
@@ -46,6 +53,7 @@ NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
     BOOL _softwareCursor;
     BOOL _gameInputSuspended;
     BOOL _confinementActive;
+    std::uint64_t _pressedButtons;
     id _localPointerMonitor;
     id _globalPointerMonitor;
 }
@@ -68,25 +76,25 @@ NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
 - (void)setGameInputSuspended:(BOOL)suspended {
     if (_gameInputSuspended == suspended) return;
     _gameInputSuspended = suspended;
+    if (suspended) _pressedButtons = 0;
     [self syncFrameCursor];
 }
 
 - (BOOL)pointerConfinementActive { return _confinementActive; }
 
 - (NSRect)pointerBoundsOnScreen {
+    if (!self.window) return NSZeroRect;
     return [self.window convertRectToScreen:[self convertRect:self.bounds toView:nil]];
 }
 
 - (BOOL)moveSystemPointerTo:(NSPoint)point {
-    const auto screen = self.window.screen;
-    NSNumber* display = screen.deviceDescription[@"NSScreenNumber"];
-    if (!display) return NO;
-    const auto quartz = CGDisplayBounds(display.unsignedIntValue);
-    const auto cocoa = screen.frame;
-    const auto result = CGWarpMouseCursorPosition(CGPointMake(
-        quartz.origin.x + point.x - NSMinX(cocoa),
-        quartz.origin.y + NSMaxY(cocoa) - point.y));
-    return result == kCGErrorSuccess;
+    if (!self.window.screen) return NO;
+    const auto target = quartz_point(point);
+    if (CGWarpMouseCursorPosition(CGPointMake(target.x, target.y)) != kCGErrorSuccess) return NO;
+    // Reassert the association after a warp to avoid delaying hardware input,
+    // as SDL's Cocoa backend does.
+    CGAssociateMouseAndMouseCursorPosition(true);
+    return YES;
 }
 
 - (void)setPointerConfinementEnabled:(BOOL)enabled {
@@ -103,32 +111,53 @@ NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
     if (NSIsEmptyRect(bounds)) return;
     _confinementActive = YES;
     const auto pointer = NSEvent.mouseLocation;
-    const auto position = NSPointInRect(pointer, bounds) ? clamp_inside(pointer, bounds)
-                                                        : NSMakePoint(NSMidX(bounds), NSMidY(bounds));
-    if (!NSEqualPoints(pointer, position)) [self moveSystemPointerTo:position];
+    if (!NSPointInRect(pointer, bounds))
+        [self moveSystemPointerTo:NSMakePoint(NSMidX(bounds), NSMidY(bounds))];
 
-    // AppKit keeps applying the user's tracking speed and acceleration.
-    // Observe motion on either side of the boundary without intercepting other apps' events.
+    // AppKit dispatches motion in the surface normally. Deliver a move in the
+    // letterbox once here because the canvas itself cannot forward it.
     __weak CoastalInputView* view = self;
     _localPointerMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:pointer_motion
         handler:^NSEvent*(NSEvent* event) {
-            [view updateConstrainedPointer];
-            return event;
+            CoastalInputView* owner = view;
+            return owner ? [owner handleLocalPointerMotion:event] : event;
         }];
     _globalPointerMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:pointer_motion
         handler:^(NSEvent*) { [view updateConstrainedPointer]; }];
 }
 
+- (BOOL)canConstrainPointer {
+    return _confinementActive && !_gameInputSuspended && NSApp.isActive &&
+        !NSApp.modalWindow && self.window.isKeyWindow;
+}
+
+- (NSEvent*)handleLocalPointerMotion:(NSEvent*)event {
+    if (![self canConstrainPointer]) return event;
+    if (event.window && event.window != self.window) return event;
+    const auto bounds = [self pointerBoundsOnScreen];
+    if (NSIsEmptyRect(bounds)) return event;
+    const auto systemPoint = NSEvent.mouseLocation;
+    if (!NSPointInRect(systemPoint, bounds))
+        [self moveSystemPointerTo:clamp_inside(systemPoint, bounds)];
+    if (event.type != NSEventTypeMouseMoved) return event;
+
+    const auto location = [self eventLocationInWindow:event];
+    if (event.window == self.window &&
+        NSPointInRect([self convertPoint:location fromView:nil], self.bounds)) return event;
+    [self forwardPointer:event phase:host::PointerEvent::Phase::Move];
+    return nil;
+}
+
 - (void)updateConstrainedPointer {
-    if (!_confinementActive || _gameInputSuspended || !NSApp.isActive || !self.window.isKeyWindow) return;
+    if (![self canConstrainPointer]) return;
     const auto bounds = [self pointerBoundsOnScreen];
     if (NSIsEmptyRect(bounds)) return;
     const auto pointer = NSEvent.mouseLocation;
+    if (NSPointInRect(pointer, bounds)) return;
     const auto next = clamp_inside(pointer, bounds);
-    if (NSEqualPoints(next, pointer)) return;
     if (![self moveSystemPointerTo:next]) return;
     // A Quartz warp does not dispatch a mouse event. Publish the edge explicitly
-    // when the original movement reached the letterbox or another window.
+    // when the original movement went outside the event stream of our window.
     [self sendPointerAtScreenPosition:next];
 }
 
@@ -179,6 +208,25 @@ NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
     return YES;
 }
 
+- (NSPoint)eventLocationInWindow:(NSEvent*)event {
+    const auto location = event.locationInWindow;
+    if (!self.window || event.window == self.window) return location;
+    const auto screen = event.window ? [event.window convertPointToScreen:location] : location;
+    return [self.window convertPointFromScreen:screen];
+}
+
+- (BOOL)viewportPointForEvent:(NSEvent*)event point:(NSPoint*)position {
+    auto location = [self eventLocationInWindow:event];
+    if (_confinementActive) {
+        const auto bounds = [self pointerBoundsOnScreen];
+        if (NSIsEmptyRect(bounds)) return NO;
+        const auto screen = [self.window convertPointToScreen:location];
+        if (!NSPointInRect(screen, bounds))
+            location = [self.window convertPointFromScreen:clamp_inside(screen, bounds)];
+    }
+    return [self viewportPointForLocation:location point:position];
+}
+
 - (void)sendPointerAtScreenPosition:(NSPoint)screen {
     NSPoint point;
     if (![self viewportPointForLocation:[self.window convertPointFromScreen:screen] point:&point]) return;
@@ -192,29 +240,26 @@ NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
     const auto position = NSEvent.mouseLocation;
     const auto bounds = [self pointerBoundsOnScreen];
     if (NSIsEmptyRect(bounds)) return;
-    [self sendPointerAtScreenPosition:_confinementActive ? clamp_inside(position, bounds) : position];
+    const auto target = _confinementActive && !NSPointInRect(position, bounds)
+        ? clamp_inside(position, bounds) : position;
+    [self sendPointerAtScreenPosition:target];
 }
 
 - (void)forwardPointer:(NSEvent*)event phase:(host::PointerEvent::Phase)phase {
     if (_gameInputSuspended) return;
     using Phase = host::PointerEvent::Phase;
-    auto location = event.locationInWindow;
-    if (_confinementActive) {
-        if (phase == Phase::Leave) {
-            [self updateConstrainedPointer];
-            return;
-        }
-        const auto bounds = [self pointerBoundsOnScreen];
-        if (NSIsEmptyRect(bounds)) return;
-        const auto screen = [self.window convertPointToScreen:location];
-        location = [self.window convertPointFromScreen:clamp_inside(screen, bounds)];
-    }
+    if (_confinementActive && phase == Phase::Leave) return;
     NSPoint point;
-    if (![self viewportPointForLocation:location point:&point]) return;
+    if (![self viewportPointForEvent:event point:&point]) return;
 
     host::PointerEvent input{phase, 0, point.x, point.y, event.modifierFlags};
     if (phase == Phase::Down || phase == Phase::Drag || phase == Phase::Up) {
         input.button = button_number(event);
+        if (input.button >= 64) return;
+        const auto button = std::uint64_t{1} << input.button;
+        if (phase == Phase::Down) _pressedButtons |= button;
+        else if (!(_pressedButtons & button)) return;
+        if (phase == Phase::Up) _pressedButtons &= ~button;
         input.click_count = static_cast<std::uint32_t>(event.clickCount);
     }
     _session->pointer_event(input);
@@ -239,14 +284,7 @@ NSPoint clamp_inside(NSPoint point, NSRect rect) noexcept {
 - (void)scrollWheel:(NSEvent*)event {
     if (_gameInputSuspended) return;
     NSPoint point;
-    auto location = event.locationInWindow;
-    if (_confinementActive) {
-        const auto bounds = [self pointerBoundsOnScreen];
-        if (NSIsEmptyRect(bounds)) return;
-        const auto screen = [self.window convertPointToScreen:location];
-        location = [self.window convertPointFromScreen:clamp_inside(screen, bounds)];
-    }
-    if (![self viewportPointForLocation:location point:&point]) return;
+    if (![self viewportPointForEvent:event point:&point]) return;
 
     _session->scroll_event({
         point.x, point.y, event.deltaX, event.deltaY,
