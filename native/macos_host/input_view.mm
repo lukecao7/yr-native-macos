@@ -188,10 +188,11 @@ NSPoint quartz_point(NSPoint point) noexcept {
 - (void)updateTrackingAreas {
     [super updateTrackingAreas];
     if (_pointerTracking) [self removeTrackingArea:_pointerTracking];
+    // The window already delivers movement to the first responder. A movement
+    // tracking area delivers the same physical event to this view a second time.
     _pointerTracking = [[NSTrackingArea alloc] initWithRect:NSZeroRect
         options:NSTrackingInVisibleRect | NSTrackingActiveInKeyWindow |
-                NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved |
-                NSTrackingEnabledDuringMouseDrag
+                NSTrackingMouseEnteredAndExited | NSTrackingEnabledDuringMouseDrag
         owner:self userInfo:nil];
     [self addTrackingArea:_pointerTracking];
 }

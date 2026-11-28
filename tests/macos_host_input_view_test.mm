@@ -279,11 +279,12 @@ void verify_tracking(CoastalInputView* view) {
     [view updateTrackingAreas];
     [view updateTrackingAreas];
     const auto needed = NSTrackingInVisibleRect | NSTrackingActiveInKeyWindow |
-                        NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved |
-                        NSTrackingEnabledDuringMouseDrag;
+                        NSTrackingMouseEnteredAndExited | NSTrackingEnabledDuringMouseDrag;
     expect(view.acceptsFirstResponder && view.trackingAreas.count == 1 &&
                (view.trackingAreas.firstObject.options & needed) == needed,
-           "The view can take key focus and tracks the current visible bounds without duplicate areas");
+           "The input view tracks crossings in its visible bounds");
+    expect((view.trackingAreas.firstObject.options & NSTrackingMouseMoved) == 0,
+           "Window mouse movement has a single delivery path");
 }
 
 }  // namespace
