@@ -22,6 +22,21 @@ struct Tile {
     Terrain terrain = Terrain::Ground;
     std::uint8_t height = 0;
     std::uint16_t resource = 0;
+
+    // Deposit in an authored map or a legacy save denotes a ground base.
+    constexpr Terrain base_terrain() const noexcept {
+        return terrain == Terrain::Deposit ? Terrain::Ground : terrain;
+    }
+    constexpr bool supports_deposit() const noexcept {
+        return base_terrain() == Terrain::Ground || base_terrain() == Terrain::Ramp;
+    }
+    constexpr Terrain effective_terrain() const noexcept {
+        return resource && supports_deposit() ? Terrain::Deposit : base_terrain();
+    }
+    constexpr bool walkable() const noexcept {
+        const auto surface = effective_terrain();
+        return surface != Terrain::Water && surface != Terrain::Rock;
+    }
 };
 
 inline constexpr std::size_t max_houses = 8;
@@ -50,7 +65,7 @@ struct Map {
     const Tile& at(Cell cell) const noexcept { return tiles[index(cell)]; }
     Tile& at(Cell cell) noexcept { return tiles[index(cell)]; }
     bool walkable(Cell cell) const noexcept {
-        return contains(cell) && at(cell).terrain != Terrain::Water && at(cell).terrain != Terrain::Rock;
+        return contains(cell) && at(cell).walkable();
     }
     bool can_travel(Cell from, Cell to) const noexcept {
         if (!walkable(from) || !walkable(to)) return false;

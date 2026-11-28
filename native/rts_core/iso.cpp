@@ -189,7 +189,7 @@ private:
 };
 
 Color terrain_color(Tile tile, bool alternate = false) {
-    switch (tile.terrain) {
+    switch (tile.effective_terrain()) {
         case Terrain::Ground:
             if (tile.height) return alternate ? color(112, 131, 96) : color(121, 139, 103);
             return alternate ? color(89, 110, 83) : color(98, 119, 89);
@@ -200,7 +200,7 @@ Color terrain_color(Tile tile, bool alternate = false) {
         case Terrain::Rock:
             return color(104, 108, 103);
         case Terrain::Deposit:
-            return tile.resource ? color(141, 119, 75) : color(116, 106, 82);
+            return color(141, 119, 75);
     }
     return background;
 }
@@ -224,11 +224,12 @@ void draw_terrain(Canvas& canvas, const Map& map, const Projection& projection, 
     } else {
         canvas.diamond(point, hw, hh, top);
     }
-    const Color edge = tile.terrain == Terrain::Water ? color(35, 78, 86) : outline;
+    const auto terrain = tile.effective_terrain();
+    const Color edge = terrain == Terrain::Water ? color(35, 78, 86) : outline;
     canvas.line({point.x - hw, point.y}, {point.x, point.y + hh}, edge);
     canvas.line({point.x, point.y + hh}, {point.x + hw, point.y}, edge);
 
-    switch (tile.terrain) {
+    switch (terrain) {
         case Terrain::Ramp:
             canvas.line({point.x - size(7), point.y}, {point.x, point.y - size(4)}, highlight);
             canvas.line({point.x, point.y - size(4)}, {point.x + size(7), point.y}, highlight);
@@ -244,12 +245,10 @@ void draw_terrain(Canvas& canvas, const Map& map, const Projection& projection, 
                          color(94, 103, 99), color(79, 91, 89));
             break;
         case Terrain::Deposit:
-            if (tile.resource) {
-                canvas.block({point.x - size(4), point.y + size(1)}, size(3), size(2), size(5),
-                             resource_gold, color(167, 118, 57), color(126, 92, 51));
-                canvas.block({point.x + size(4), point.y + size(2)}, size(3), size(2), size(7),
-                             color(252, 213, 125), color(186, 134, 76), color(145, 101, 56));
-            }
+            canvas.block({point.x - size(4), point.y + size(1)}, size(3), size(2), size(5),
+                         resource_gold, color(167, 118, 57), color(126, 92, 51));
+            canvas.block({point.x + size(4), point.y + size(2)}, size(3), size(2), size(7),
+                         color(252, 213, 125), color(186, 134, 76), color(145, 101, 56));
             break;
         case Terrain::Ground:
             break;
@@ -636,7 +635,8 @@ bool render_isometric(const World& world, const Camera& camera, const ViewOverla
             if (!visible(viewport, center, hw + 8)) continue;
             const auto& tile = world.map.at(cell);
             const int rise = tile.height ? scaled_px(elevation_step * tile.height, projection) : 0;
-            const int top = (tile.terrain == Terrain::Rock || tile.terrain == Terrain::Deposit) ?
+            const auto terrain = tile.effective_terrain();
+            const int top = (terrain == Terrain::Rock || terrain == Terrain::Deposit) ?
                 std::max(hh, terrain_detail) : hh;
             add_to_regions({center.x - hw, center.y - top, center.x + hw + 1, center.y + hh + rise + 1},
                            [&](RasterRegion& region) { region.terrain.push_back({cell, center}); });

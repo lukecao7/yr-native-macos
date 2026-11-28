@@ -103,7 +103,7 @@ bool deploy(World& world, const Command& command) {
         return owned(entity, command.side, UnitKind::Pioneer) &&
             (selected.empty() || std::find(selected.begin(), selected.end(), entity.id) != selected.end()) &&
             (command.target == Cell{} || command.target == entity.position) &&
-            world.map.at(entity.position).terrain == Terrain::Ground;
+            world.map.at(entity.position).effective_terrain() == Terrain::Ground;
     });
     if (candidate == world.entities.end()) return false;
     const auto current_hp = candidate->hp;
@@ -140,7 +140,7 @@ public:
             deposits_.emplace();
             for (std::size_t i = 0; i < world_.map.tiles.size(); ++i) {
                 const auto& tile = world_.map.tiles[i];
-                if (tile.terrain == Terrain::Deposit && tile.resource != 0) {
+                if (tile.effective_terrain() == Terrain::Deposit) {
                     deposits_->push_back(world_.map.cell(static_cast<int>(i)));
                 }
             }
@@ -198,8 +198,8 @@ private:
 
 void seek(World& world, Entity& collector, GatherRoutes& routes) {
     const auto valid = [&](Cell cell) {
-        return can_stand(world, collector, cell) && world.map.at(cell).terrain == Terrain::Deposit &&
-            world.map.at(cell).resource != 0;
+        return can_stand(world, collector, cell) &&
+            world.map.at(cell).effective_terrain() == Terrain::Deposit;
     };
     // Occupancy can change while a collector approaches. Replan only when the
     // previous target is lost or the collector needs a new route.
@@ -218,7 +218,7 @@ void seek(World& world, Entity& collector, GatherRoutes& routes) {
 
 void harvest(World& world, Entity& collector) noexcept {
     if (collector.position != collector.deposit || !world.map.contains(collector.deposit) ||
-        world.map.at(collector.deposit).resource == 0) {
+        world.map.at(collector.deposit).effective_terrain() != Terrain::Deposit) {
         collector.gather = GatherPhase::Seek;
         collector.work = 0;
         collector.deposit = {};
@@ -347,7 +347,7 @@ std::optional<Rules> load_rules(const std::filesystem::path& path, std::string& 
 
 bool can_build(const World& world, Side side, UnitKind kind, Cell position) noexcept {
     if (world.house_defeated(side) || !is_building(kind) || kind == UnitKind::Hub ||
-        !world.map.contains(position) || world.map.at(position).terrain != Terrain::Ground ||
+        !world.map.contains(position) || world.map.at(position).effective_terrain() != Terrain::Ground ||
         !world.free_at(position) || world.side(side).funds < world.rules.spec(kind).cost) return false;
     return std::any_of(world.entities.begin(), world.entities.end(), [&](const Entity& entity) {
         return owned(entity, side, UnitKind::Hub) && distance(entity.position, position) <= build_radius;
