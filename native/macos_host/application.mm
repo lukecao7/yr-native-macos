@@ -881,7 +881,6 @@ void notify_waiting_display(const std::shared_ptr<DisplayPulseState>& state) {
 - (void)windowDidBecomeKey:(NSNotification*)notification {
     [_window makeFirstResponder:_surface];
     [self syncPointerConfinement];
-    [_surface refreshPointerPosition];
 }
 
 - (void)windowDidResignKey:(NSNotification*)notification {
